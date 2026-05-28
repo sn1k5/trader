@@ -1,0 +1,19 @@
+server:
+  port: 8081
+
+matching-engine:
+  host: 38.76.219.145
+  port: 50059
+  backend: netty
+  heartbeat:
+    intervalSec: 5
+    timeoutSec: 15
+
+market-data:
+  maxDepth: 20
+  tradeHistorySize: 1000
+
+logging:
+  level:
+    com.cpptrader.marketdata: INFO
+    io.netty: WARN

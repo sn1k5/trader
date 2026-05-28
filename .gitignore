@@ -1,0 +1,16 @@
+.trae/
+dump.rdb
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.so
+.DS_Store
+Thumbs.db
+*.log
+.env
+.venv/
+venv/
+node_modules/
