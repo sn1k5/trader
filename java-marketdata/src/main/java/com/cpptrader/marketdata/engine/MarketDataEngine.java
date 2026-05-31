@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
@@ -23,7 +24,7 @@ public class MarketDataEngine {
     private final ConcurrentHashMap<Integer, OrderBookManager> orderBooks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, LinkedBlockingQueue<TradeRecord>> tradeHistory = new ConcurrentHashMap<>();
 
-    private long tradeIdCounter = 0;
+    private final AtomicLong tradeIdCounter = new AtomicLong(0);
 
     public MarketDataEngine(MarketDataConfig config, MarketDataWebSocketHandler wsHandler, KlineEngine klineEngine) {
         this.config = config;
@@ -57,7 +58,7 @@ public class MarketDataEngine {
             ob.onTrade(event.getExecutePrice(), event.getExecuteQuantity(), event.getOrder().orderSide);
 
             TradeRecord trade = new TradeRecord();
-            trade.setTradeId(++tradeIdCounter);
+            trade.setTradeId(tradeIdCounter.incrementAndGet());
             trade.setSymbolId(symbolId);
             trade.setPrice(event.getExecutePrice());
             trade.setQuantity(event.getExecuteQuantity());

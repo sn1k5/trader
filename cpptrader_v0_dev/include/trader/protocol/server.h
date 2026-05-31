@@ -14,10 +14,12 @@
 #include "message.h"
 #include "hmac.h"
 #include "anti_replay.h"
+#include "session_manager.h"
 
 #include "trader/matching/market_manager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstddef>
@@ -31,6 +33,19 @@
 
 namespace CppTrader {
 namespace Protocol {
+
+struct ConnectionAckState
+{
+    std::atomic<uint64_t> last_sent_seq{0};
+    std::atomic<uint64_t> last_acked_seq{0};
+};
+
+struct ApiKeyInfo
+{
+    std::string secret;
+    uint64_t account_id = 0;
+    Role role = Role::TRADER;
+};
 
 //! Simple token-bucket rate limiter
 class RateLimiter
@@ -70,9 +85,14 @@ private:
 */
 class ProtocolServer
 {
+    friend class BusinessThread;
+
 public:
-    //! Request handler function type
     using RequestHandler = std::function<void(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len)>;
+    using OutboundSendHandler = std::function<void(uint16_t conn_id, const void* data, size_t len)>;
+    using OutboundBroadcastHandler = std::function<void(const void* data, size_t len)>;
+    using OutputCallback = std::function<void(uint16_t conn_id, const void* data, size_t len)>;
+    using BroadcastCallback = std::function<void(const void* data, size_t len)>;
 
     //! Constructor
     /*!
@@ -87,8 +107,14 @@ public:
     ProtocolServer& operator=(const ProtocolServer&) = delete;
     ProtocolServer& operator=(ProtocolServer&&) = delete;
 
-    //! Initialize the server
     bool init();
+
+    void SetOutboundHandlers(OutboundSendHandler send_handler, OutboundBroadcastHandler broadcast_handler);
+
+    void SetOutputCallback(OutputCallback send_cb, BroadcastCallback broadcast_cb);
+    void ProcessMessage(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len);
+    void ProcessConnect(uint16_t conn_id);
+    void ProcessDisconnect(uint16_t conn_id);
 
     //! Run one iteration of the event loop
     void poll();
@@ -182,6 +208,8 @@ public:
     */
     void RemoveConnection(uint16_t conn_id);
 
+    void RecordAck(uint16_t conn_id, uint64_t ack_seq);
+
     //! Set session key for a connection (after successful authentication)
     void SetSessionKey(uint16_t conn_id, const uint8_t* key, size_t key_len);
 
@@ -192,7 +220,11 @@ public:
     void RemoveSessionKey(uint16_t conn_id);
 
     //! Register an API key (api_key_id -> api_key_secret mapping)
-    void RegisterApiKey(const std::string& api_key_id, const std::string& api_key_secret);
+    void RegisterApiKey(const std::string& api_key_id, const std::string& api_key_secret,
+                        uint64_t account_id = 0, uint8_t role = 1);
+
+    //! Look up API key info by ID (returns empty secret if not found)
+    ApiKeyInfo GetApiKeyInfo(const std::string& api_key_id) const;
 
     //! Look up API key secret by ID (returns empty string if not found)
     std::string GetApiKeySecret(const std::string& api_key_id) const;
@@ -200,15 +232,42 @@ public:
     //! Get the anti-replay checker
     AntiReplayChecker& GetAntiReplayChecker() { return _anti_replay; }
 
+    //! Get the session manager
+    SessionManager& GetSessionManager() { return _session_manager; }
+
     //! Get the network backend
     INetworkBackend* Backend() const noexcept { return _backend.get(); }
 
     //! Get the market manager
     CppTrader::Matching::MarketManager& Market() const noexcept { return _market; }
 
+    //! Validate session for a connection, returns true if session is valid
+    bool ValidateSession(uint16_t conn_id);
+
+    //! Touch session for a connection (update last_active)
+    void TouchSession(uint16_t conn_id);
+
+    struct AuthResult
+    {
+        std::shared_ptr<SessionManager::Session> session;
+        HmacVerifier* verifier = nullptr;
+    };
+
+    //! Validate session + touch + get HMAC verifier in one locked operation
+    AuthResult ValidateAndTouchSession(uint16_t conn_id);
+
+    //! Cleanup old connection on session recovery
+    void CleanupOldConnection(uint16_t old_conn_id);
+
 private:
     std::unique_ptr<INetworkBackend> _backend;
     CppTrader::Matching::MarketManager& _market;
+
+    OutboundSendHandler _outbound_send;
+    OutboundBroadcastHandler _outbound_broadcast;
+
+    OutputCallback _output_send;
+    BroadcastCallback _output_broadcast;
 
     // Message type -> handler mapping
     std::unordered_map<MsgType, RequestHandler> _handlers;
@@ -219,6 +278,8 @@ private:
 
     // Authentication state: conn_id -> authenticated flag
     std::unordered_map<uint16_t, bool> _authenticated_connections;
+
+    std::unordered_map<uint16_t, ConnectionAckState> conn_ack_states_;
 
     // Whether authentication is required (default: false for backward compatibility)
     bool _auth_enabled;
@@ -232,14 +293,20 @@ private:
     // HMAC session state: conn_id -> HmacVerifier
     std::unordered_map<uint16_t, std::unique_ptr<HmacVerifier>> _hmac_verifiers;
 
-    // API key store: api_key_id -> api_key_secret
-    std::unordered_map<std::string, std::string> _api_keys;
+    // API key store: api_key_id -> ApiKeyInfo
+    std::unordered_map<std::string, ApiKeyInfo> _api_keys;
 
     // Anti-replay checker
     AntiReplayChecker _anti_replay;
 
+    // Session manager
+    SessionManager _session_manager;
+
     // Mutex for protecting shared state
     mutable std::mutex _state_mutex;
+
+    // Last cleanup timestamp for periodic session cleanup
+    uint64_t _last_cleanup_ms;
 
     // Internal message dispatcher
     void OnMessage(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len);

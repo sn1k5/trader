@@ -1,11 +1,14 @@
 package com.cpptrader.admin.protocol.client;
 
+import com.cpptrader.admin.idempotent.DedupTableService;
 import com.cpptrader.admin.protocol.events.OrderBookUpdateEvent;
 import com.cpptrader.admin.protocol.events.OrderUpdateEvent;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.function.Consumer;
 
@@ -15,21 +18,31 @@ public class ProtocolStreamSubscriber {
     private final Set<Integer> orderBookSubscriptions = new CopyOnWriteArraySet<>();
     private final Set<Integer> ordersSubscriptions = new CopyOnWriteArraySet<>();
 
-    private Consumer<OrderBookUpdateEvent> orderBookCallback;
-    private Consumer<OrderUpdateEvent> ordersCallback;
+    private final List<Consumer<OrderBookUpdateEvent>> orderBookCallbacks = new CopyOnWriteArrayList<>();
+    private final List<Consumer<OrderUpdateEvent>> ordersCallbacks = new CopyOnWriteArrayList<>();
 
     private final ProtocolClientService clientService;
+    private final DedupTableService dedupTableService;
 
-    public ProtocolStreamSubscriber(ProtocolClientService clientService) {
+    public ProtocolStreamSubscriber(ProtocolClientService clientService, DedupTableService dedupTableService) {
         this.clientService = clientService;
+        this.dedupTableService = dedupTableService;
     }
 
     public void setOrderBookCallback(Consumer<OrderBookUpdateEvent> callback) {
-        this.orderBookCallback = callback;
+        this.orderBookCallbacks.add(callback);
+    }
+
+    public void addOrderBookCallback(Consumer<OrderBookUpdateEvent> callback) {
+        this.orderBookCallbacks.add(callback);
     }
 
     public void setOrdersCallback(Consumer<OrderUpdateEvent> callback) {
-        this.ordersCallback = callback;
+        this.ordersCallbacks.add(callback);
+    }
+
+    public void addOrdersCallback(Consumer<OrderUpdateEvent> callback) {
+        this.ordersCallbacks.add(callback);
     }
 
     public void subscribeOrderBook(int symbolId) {
@@ -55,9 +68,15 @@ public class ProtocolStreamSubscriber {
     }
 
     public void onOrderBookUpdate(OrderBookUpdateEvent event) {
-        if (orderBookCallback != null) {
+        String messageId = "proto-ob-" + event.getSequence();
+        if (!dedupTableService.tryAcquire(messageId, "protocol-stream")) {
+            log.debug("Duplicate OrderBook event, skipping: seq={}", event.getSequence());
+            return;
+        }
+
+        for (Consumer<OrderBookUpdateEvent> callback : orderBookCallbacks) {
             try {
-                orderBookCallback.accept(event);
+                callback.accept(event);
             } catch (Exception e) {
                 log.error("Error in OrderBook callback", e);
             }
@@ -65,9 +84,15 @@ public class ProtocolStreamSubscriber {
     }
 
     public void onOrdersUpdate(OrderUpdateEvent event) {
-        if (ordersCallback != null) {
+        String messageId = "proto-order-" + event.getSequence();
+        if (!dedupTableService.tryAcquire(messageId, "protocol-stream")) {
+            log.debug("Duplicate Order event, skipping: seq={}", event.getSequence());
+            return;
+        }
+
+        for (Consumer<OrderUpdateEvent> callback : ordersCallbacks) {
             try {
-                ordersCallback.accept(event);
+                callback.accept(event);
             } catch (Exception e) {
                 log.error("Error in Orders callback", e);
             }
@@ -100,7 +125,7 @@ public class ProtocolStreamSubscriber {
     public void clear() {
         orderBookSubscriptions.clear();
         ordersSubscriptions.clear();
-        orderBookCallback = null;
-        ordersCallback = null;
+        orderBookCallbacks.clear();
+        ordersCallbacks.clear();
     }
 }

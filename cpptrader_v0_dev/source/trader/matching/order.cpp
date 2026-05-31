@@ -26,6 +26,10 @@ ErrorCode Order::Validate() const noexcept
     if (LeavesQuantity == 0)
         return ErrorCode::ORDER_QUANTITY_INVALID;
 
+    assert((StpPolicy == STPPolicy::CANCEL_NEW || StpPolicy == STPPolicy::CANCEL_OLD || StpPolicy == STPPolicy::CANCEL_BOTH || StpPolicy == STPPolicy::DECREMENT) && "Invalid STP policy!");
+    if (StpPolicy != STPPolicy::CANCEL_NEW && StpPolicy != STPPolicy::CANCEL_OLD && StpPolicy != STPPolicy::CANCEL_BOTH && StpPolicy != STPPolicy::DECREMENT)
+        return ErrorCode::ORDER_PARAMETER_INVALID;
+
     // Validate market order
     if (IsMarket())
     {

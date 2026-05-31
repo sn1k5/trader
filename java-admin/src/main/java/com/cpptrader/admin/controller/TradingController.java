@@ -8,6 +8,7 @@ import com.cpptrader.admin.protocol.responses.OrderResponse;
 import com.cpptrader.admin.protocol.responses.SimpleResponse;
 import com.cpptrader.admin.protocol.responses.SymbolResponse;
 import com.cpptrader.admin.risk.RiskCheckService;
+import com.cpptrader.admin.stp.SelfTradePreventionService;
 import com.cpptrader.admin.user.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -24,11 +25,14 @@ public class TradingController {
 
     private final ProtocolClientService protocolClient;
     private final RiskCheckService riskCheckService;
+    private final SelfTradePreventionService stpService;
     private final UserService userService;
 
-    public TradingController(ProtocolClientService protocolClient, RiskCheckService riskCheckService, UserService userService) {
+    public TradingController(ProtocolClientService protocolClient, RiskCheckService riskCheckService,
+                              SelfTradePreventionService stpService, UserService userService) {
         this.protocolClient = protocolClient;
         this.riskCheckService = riskCheckService;
+        this.stpService = stpService;
         this.userService = userService;
     }
 
@@ -203,6 +207,36 @@ public class TradingController {
             return result;
         }
 
+        byte orderSide = "SELL".equalsIgnoreCase(side) ? ProtocolConstants.OrderSide.SELL : ProtocolConstants.OrderSide.BUY;
+
+        var stpResult = stpService.check(currentUserId, id, symbolId, orderSide, price, quantity);
+        if (!stpResult.passed) {
+            if (stpResult.shouldRejectIncoming()) {
+                Map<String, Object> result = new HashMap<>();
+                result.put("error", "SELF_TRADE_PREVENTED");
+                result.put("message", stpResult.rejectReason);
+                result.put("stpPolicy", stpResult.policy);
+                result.put("stpAction", stpResult.actionTaken);
+                result.put("overlapCount", stpResult.overlapCount);
+                return result;
+            }
+            if (stpResult.shouldDecrement()) {
+                long decrementQty = stpService.computeDecrementQuantity(
+                        currentUserId, symbolId, orderSide, price, quantity);
+                if (decrementQty >= quantity) {
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("error", "SELF_TRADE_PREVENTED");
+                    result.put("message", "Entire quantity would self-trade");
+                    result.put("stpPolicy", stpResult.policy);
+                    result.put("stpAction", "QUANTITY_DECREMENTED_FULL");
+                    return result;
+                }
+                quantity = quantity - decrementQty;
+                log.info("STP DECREMENT: orderId={}, originalQty={}, decrementQty={}, newQty={}",
+                        id, quantity + decrementQty, decrementQty, quantity);
+            }
+        }
+
         byte orderType = switch (type.toUpperCase()) {
             case "LIMIT" -> ProtocolConstants.OrderType.LIMIT;
             case "MARKET" -> ProtocolConstants.OrderType.MARKET;
@@ -212,8 +246,6 @@ public class TradingController {
             case "TRAILING_STOP_LIMIT" -> ProtocolConstants.OrderType.TRAILING_STOP_LIMIT;
             default -> ProtocolConstants.OrderType.LIMIT;
         };
-
-        byte orderSide = "SELL".equalsIgnoreCase(side) ? ProtocolConstants.OrderSide.SELL : ProtocolConstants.OrderSide.BUY;
 
         long stopPrice = 0;
         long slippage = ProtocolConstants.NO_SLIPPAGE;
@@ -276,6 +308,10 @@ public class TradingController {
         resp.fromBytes(respBytes);
         result.put("error", ProtocolConstants.ErrorCode.name(resp.getErrorCode()));
         if (resp.getErrorCode() == ProtocolConstants.ErrorCode.OK) {
+            stpService.addActiveOrder(currentUserId, resp.getOrder().id,
+                    resp.getOrder().symbolId, resp.getOrder().orderSide,
+                    resp.getOrder().price, resp.getOrder().leavesQuantity);
+
             result.put("orderId", resp.getOrder().id);
             result.put("symbolId", resp.getOrder().symbolId);
             result.put("side", ProtocolConstants.OrderSide.name(resp.getOrder().orderSide));

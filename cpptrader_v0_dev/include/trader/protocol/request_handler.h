@@ -4,6 +4,7 @@
 #include "server.h"
 #include "protocol.h"
 #include "message.h"
+#include "session_manager.h"
 
 #include "trader/matching/market_handler.h"
 #include "trader/matching/market_manager.h"
@@ -13,6 +14,7 @@
 #include "trader/matching/level.h"
 
 #include "trader/wal/wal.h"
+#include "trader/snapshot/snapshot.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -27,6 +29,9 @@ public:
     RequestHandler(ProtocolServer& server, CppTrader::Matching::MarketManager& market);
     RequestHandler(ProtocolServer& server, CppTrader::Matching::MarketManager& market, 
                    std::shared_ptr<CppTrader::WAL::WALWriter> wal_writer);
+    RequestHandler(ProtocolServer& server, CppTrader::Matching::MarketManager& market,
+                   std::shared_ptr<CppTrader::WAL::WALWriter> wal_writer,
+                   std::shared_ptr<CppTrader::Snapshot::SnapshotManager> snapshot_manager);
     ~RequestHandler() override = default;
 
     RequestHandler(const RequestHandler&) = delete;
@@ -82,11 +87,13 @@ public:
     void HandleAuth(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len);
     void HandleEventAck(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len);
     void HandleReconcileRequest(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len);
+    void HandleSnapshot(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len);
 
 private:
     ProtocolServer& _server;
     CppTrader::Matching::MarketManager& _market;
     std::shared_ptr<CppTrader::WAL::WALWriter> _wal_writer;
+    std::shared_ptr<CppTrader::Snapshot::SnapshotManager> _snapshot_manager;
     std::atomic<uint64_t> _trade_id_generator;
 
     static OrderProto ConvertOrder(const CppTrader::Matching::Order& order);
@@ -97,7 +104,10 @@ private:
     static CppTrader::Matching::OrderType ConvertOrderType(OrderType type);
     static CppTrader::Matching::OrderSide ConvertOrderSide(OrderSide side);
     static CppTrader::Matching::OrderTimeInForce ConvertOrderTimeInForce(OrderTimeInForce tif);
-    static ErrorCode ConvertMatchingError(CppTrader::Matching::ErrorCode error);
+        static CppTrader::Matching::STPPolicy ConvertSTPPolicy(Protocol::STPPolicy policy);
+        static ErrorCode ConvertMatchingError(CppTrader::Matching::ErrorCode error);
+
+    bool CheckRole(uint16_t conn_id, Role minimum_role);
 };
 
 } // namespace Protocol

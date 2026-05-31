@@ -15,6 +15,7 @@ import java.util.UUID;
 public class OutboxMessageService {
 
     private final OutboxMessageRepository outboxMessageRepository;
+    private final org.springframework.context.ApplicationContext applicationContext;
 
     @Transactional
     public OutboxMessage createMessage(String topic, String payload) {
@@ -30,6 +31,26 @@ public class OutboxMessageService {
     }
 
     @Transactional
+    public OutboxMessage createAndPublish(String topic, String payload) {
+        OutboxMessage message = createMessage(topic, payload);
+
+        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+            new org.springframework.transaction.support.TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        OutboxMessageScheduler scheduler = applicationContext.getBean(OutboxMessageScheduler.class);
+                        scheduler.scanAndPublish();
+                    } catch (Exception e) {
+                        log.warn("Failed to trigger immediate outbox publish after commit", e);
+                    }
+                }
+            });
+
+        return message;
+    }
+
+    @Transactional
     public void markAsSent(Long id) {
         OutboxMessage message = outboxMessageRepository.findById(id).orElse(null);
         if (message != null) {
@@ -40,14 +61,12 @@ public class OutboxMessageService {
 
     @Transactional
     public void markAsConsumed(String messageId) {
-        List<OutboxMessage> messages = outboxMessageRepository.findByStatus(OutboxMessage.Status.SENT.getValue());
-        messages.stream()
-                .filter(m -> m.getMessageId().equals(messageId))
-                .findFirst()
-                .ifPresent(m -> {
-                    m.setStatus(OutboxMessage.Status.CONSUMED.getValue());
-                    outboxMessageRepository.save(m);
-                });
+        outboxMessageRepository.findByMessageId(messageId).ifPresent(m -> {
+            if (m.getStatus() == OutboxMessage.Status.SENT.getValue()) {
+                m.setStatus(OutboxMessage.Status.CONSUMED.getValue());
+                outboxMessageRepository.save(m);
+            }
+        });
     }
 
     @Transactional
@@ -69,7 +88,8 @@ public class OutboxMessageService {
 
     public List<OutboxMessage> findPendingMessages() {
         return outboxMessageRepository.findByStatusAndNextRetryTimeBefore(
-                OutboxMessage.Status.PENDING.getValue(), LocalDateTime.now());
+                OutboxMessage.Status.PENDING.getValue(), LocalDateTime.now(),
+                org.springframework.data.domain.PageRequest.of(0, 100)).getContent();
     }
 
     public List<OutboxMessage> findDeadMessages() {

@@ -7,7 +7,6 @@
 */
 
 #include "trader/protocol/server.h"
-#include "trader/protocol/tcp_backend.h"
 
 #include <cstdio>
 #include <cstring>
@@ -21,6 +20,7 @@ ProtocolServer::ProtocolServer(std::unique_ptr<INetworkBackend> backend, CppTrad
     : _backend(std::move(backend))
     , _market(market)
     , _auth_enabled(false)
+    , _last_cleanup_ms(0)
 {
 }
 
@@ -28,32 +28,60 @@ ProtocolServer::~ProtocolServer()
 {
 }
 
+void ProtocolServer::SetOutboundHandlers(OutboundSendHandler send_handler, OutboundBroadcastHandler broadcast_handler)
+{
+    _outbound_send = std::move(send_handler);
+    _outbound_broadcast = std::move(broadcast_handler);
+}
+
+void ProtocolServer::SetOutputCallback(OutputCallback send_cb, BroadcastCallback broadcast_cb)
+{
+    _output_send = std::move(send_cb);
+    _output_broadcast = std::move(broadcast_cb);
+}
+
+void ProtocolServer::ProcessMessage(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len)
+{
+    OnMessage(conn_id, header, body, body_len);
+}
+
+void ProtocolServer::ProcessConnect(uint16_t conn_id)
+{
+    OnConnect(conn_id);
+}
+
+void ProtocolServer::ProcessDisconnect(uint16_t conn_id)
+{
+    OnDisconnect(conn_id);
+}
+
 bool ProtocolServer::init()
 {
-    if (!_backend)
+    if (_backend)
     {
-        std::cerr << "ProtocolServer::init() failed: no backend" << std::endl;
-        return false;
-    }
-
-    // Set up backend callbacks
-    if (auto* tcp = dynamic_cast<TcpBackend*>(_backend.get()))
-    {
-        tcp->SetMessageHandler([this](uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len)
+        _backend->SetMessageHandler([this](uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len)
         {
             OnMessage(conn_id, header, body, body_len);
         });
-        tcp->SetConnectHandler([this](uint16_t conn_id)
+        _backend->SetConnectHandler([this](uint16_t conn_id)
         {
             OnConnect(conn_id);
         });
-        tcp->SetDisconnectHandler([this](uint16_t conn_id)
+        _backend->SetDisconnectHandler([this](uint16_t conn_id)
         {
             OnDisconnect(conn_id);
         });
+
+        return _backend->init();
     }
 
-    return _backend->init();
+    if (_output_send && _output_broadcast)
+    {
+        return true;
+    }
+
+    std::cerr << "ProtocolServer::init() failed: no backend and no output callbacks" << std::endl;
+    return false;
 }
 
 void ProtocolServer::poll()
@@ -71,41 +99,52 @@ void ProtocolServer::RegisterHandler(MsgType msg_type, const RequestHandler& han
 
 void ProtocolServer::SendResponse(uint16_t conn_id, const MsgHeader& header, const void* body, size_t body_len)
 {
-    if (!_backend)
+    if (!_backend && !_output_send)
         return;
 
-    std::cout << "[DEBUG] SendResponse conn=" << conn_id << " type=0x" << std::hex << static_cast<int>(header.Type)
-              << std::dec << " flags=0x" << std::hex << static_cast<int>(header.Flags)
-              << std::dec << " body_len=" << body_len << std::endl;
+    MsgHeader out_header = header;
+    {
+        std::lock_guard<std::mutex> lock(_state_mutex);
+        auto& ack_state = conn_ack_states_[conn_id];
+        out_header.Sequence = static_cast<uint32_t>(++ack_state.last_sent_seq);
+    }
 
     std::vector<uint8_t> frame(sizeof(MsgHeader) + body_len);
-    std::memcpy(frame.data(), &header, sizeof(MsgHeader));
+    std::memcpy(frame.data(), &out_header, sizeof(MsgHeader));
     if (body_len > 0 && body != nullptr)
     {
         std::memcpy(frame.data() + sizeof(MsgHeader), body, body_len);
     }
 
-    _backend->send(conn_id, frame.data(), frame.size());
+    if (_output_send)
+        _output_send(conn_id, frame.data(), frame.size());
+    else if (_backend)
+        _backend->send(conn_id, frame.data(), frame.size());
 }
 
 void ProtocolServer::SendResponse(uint16_t conn_id, const MsgHeader& header)
 {
-    if (!_backend)
+    if (!_backend && !_output_send)
         return;
 
-    std::cout << "[DEBUG] SendResponse(header-only) conn=" << conn_id << " type=0x" << std::hex << static_cast<int>(header.Type)
-              << std::dec << " flags=0x" << std::hex << static_cast<int>(header.Flags) << std::dec << std::endl;
+    MsgHeader out_header = header;
+    {
+        std::lock_guard<std::mutex> lock(_state_mutex);
+        auto& ack_state = conn_ack_states_[conn_id];
+        out_header.Sequence = static_cast<uint32_t>(++ack_state.last_sent_seq);
+    }
 
-    _backend->send(conn_id, &header, sizeof(MsgHeader));
+    if (_output_send)
+        _output_send(conn_id, &out_header, sizeof(MsgHeader));
+    else if (_backend)
+        _backend->send(conn_id, &out_header, sizeof(MsgHeader));
 }
 
 void ProtocolServer::Broadcast(const MsgHeader& header, const void* body, size_t body_len)
 {
-    if (!_backend)
+    if (!_backend && !_output_broadcast)
         return;
 
-    std::cout << "[DEBUG] Broadcast type=0x" << std::hex << static_cast<int>(header.Type)
-              << std::dec << " body_len=" << body_len << std::endl;
 
     std::vector<uint8_t> frame(sizeof(MsgHeader) + body_len);
     std::memcpy(frame.data(), &header, sizeof(MsgHeader));
@@ -114,16 +153,17 @@ void ProtocolServer::Broadcast(const MsgHeader& header, const void* body, size_t
         std::memcpy(frame.data() + sizeof(MsgHeader), body, body_len);
     }
 
-    _backend->broadcast(frame.data(), frame.size());
+    if (_output_broadcast)
+        _output_broadcast(frame.data(), frame.size());
+    else if (_backend)
+        _backend->broadcast(frame.data(), frame.size());
 }
 
 void ProtocolServer::BroadcastToSymbol(uint32_t symbol_id, const MsgHeader& header, const void* body, size_t body_len)
 {
-    if (!_backend)
+    if (!_backend && !_output_send)
         return;
 
-    std::cout << "[DEBUG] BroadcastToSymbol symbol_id=" << symbol_id << " type=0x" << std::hex << static_cast<int>(header.Type)
-              << std::dec << " body_len=" << body_len << std::endl;
 
     std::vector<uint8_t> frame(sizeof(MsgHeader) + body_len);
     std::memcpy(frame.data(), &header, sizeof(MsgHeader));
@@ -132,40 +172,55 @@ void ProtocolServer::BroadcastToSymbol(uint32_t symbol_id, const MsgHeader& head
         std::memcpy(frame.data() + sizeof(MsgHeader), body, body_len);
     }
 
-    std::lock_guard<std::mutex> lock(_state_mutex);
-    for (const auto& [conn_id, symbols] : _order_book_subscriptions)
+    std::vector<uint16_t> target_conns;
     {
-        if (symbols.find(symbol_id) != symbols.end())
+        std::lock_guard<std::mutex> lock(_state_mutex);
+        for (const auto& [conn_id, symbols] : _order_book_subscriptions)
         {
-            _backend->send(conn_id, frame.data(), frame.size());
+            if (symbols.find(symbol_id) != symbols.end())
+            {
+                target_conns.push_back(conn_id);
+            }
+        }
+
+        for (const auto& [conn_id, symbols] : _order_subscriptions)
+        {
+            if (symbols.find(symbol_id) != symbols.end())
+            {
+                if (_order_book_subscriptions.count(conn_id) &&
+                    _order_book_subscriptions.at(conn_id).count(symbol_id))
+                {
+                    continue;
+                }
+
+                target_conns.push_back(conn_id);
+            }
         }
     }
 
-    for (const auto& [conn_id, symbols] : _order_subscriptions)
+    for (uint16_t cid : target_conns)
     {
-        if (symbols.find(symbol_id) != symbols.end())
         {
-            if (_order_book_subscriptions.count(conn_id) &&
-                _order_book_subscriptions.at(conn_id).count(symbol_id))
-            {
-                continue;
-            }
-
-            _backend->send(conn_id, frame.data(), frame.size());
+            std::lock_guard<std::mutex> lock(_state_mutex);
+            auto& ack_state = conn_ack_states_[cid];
+            reinterpret_cast<MsgHeader*>(frame.data())->Sequence = static_cast<uint32_t>(++ack_state.last_sent_seq);
         }
+
+        if (_output_send)
+            _output_send(cid, frame.data(), frame.size());
+        else if (_backend)
+            _backend->send(cid, frame.data(), frame.size());
     }
 }
 
 void ProtocolServer::SubscribeOrderBook(uint16_t conn_id, uint32_t symbol_id)
 {
-    std::cout << "[DEBUG] SubscribeOrderBook conn=" << conn_id << " symbol_id=" << symbol_id << std::endl;
     std::lock_guard<std::mutex> lock(_state_mutex);
     _order_book_subscriptions[conn_id].insert(symbol_id);
 }
 
 void ProtocolServer::SubscribeOrders(uint16_t conn_id, uint32_t symbol_id)
 {
-    std::cout << "[DEBUG] SubscribeOrders conn=" << conn_id << " symbol_id=" << symbol_id << std::endl;
     std::lock_guard<std::mutex> lock(_state_mutex);
     _order_subscriptions[conn_id].insert(symbol_id);
 }
@@ -205,18 +260,28 @@ void ProtocolServer::RemoveConnection(uint16_t conn_id)
     _order_subscriptions.erase(conn_id);
     _hmac_verifiers.erase(conn_id);
     _authenticated_connections.erase(conn_id);
+    conn_ack_states_.erase(conn_id);
+    _session_manager.Destroy(conn_id);
 }
 
 void ProtocolServer::OnMessage(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len)
 {
-    std::cout << "[DEBUG] OnMessage conn=" << conn_id << " type=0x" << std::hex << static_cast<int>(header.Type)
-              << std::dec << " flags=0x" << std::hex << static_cast<int>(header.Flags)
-              << std::dec << " body_len=" << body_len << std::endl;
+
+    // Periodic session cleanup (every 60 seconds)
+    {
+        uint64_t now_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        if (now_ms - _last_cleanup_ms > 60000)
+        {
+            _session_manager.CleanupExpired();
+            _last_cleanup_ms = now_ms;
+        }
+    }
 
     // Rate limiting check
     if (!_rate_limiter.Allow())
     {
-        std::cout << "[DEBUG] OnMessage conn=" << conn_id << " RATE LIMITED" << std::endl;
         SimpleResponse response(ErrorCode::RATE_LIMITED);
         MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE, sizeof(response));
         SendResponse(conn_id, resp_header, &response, sizeof(response));
@@ -234,7 +299,6 @@ void ProtocolServer::OnMessage(uint16_t conn_id, const MsgHeader& header, const 
             if (type != MsgType::AUTH_REQUEST && type != MsgType::HEARTBEAT_REQ && type != MsgType::HEARTBEAT_RESP &&
                 type != MsgType::RECONCILE_REQUEST && type != MsgType::RECONCILE_RESPONSE)
             {
-                std::cout << "[DEBUG] OnMessage conn=" << conn_id << " NOT AUTHENTICATED" << std::endl;
                 SimpleResponse response(ErrorCode::NOT_AUTHENTICATED);
                 MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE, sizeof(response));
                 SendResponse(conn_id, resp_header, &response, sizeof(response));
@@ -245,17 +309,25 @@ void ProtocolServer::OnMessage(uint16_t conn_id, const MsgHeader& header, const 
         {
             if (header.Type == MsgType::AUTH_REQUEST)
             {
-                std::cout << "[DEBUG] OnMessage conn=" << conn_id << " RE-AUTH NOT ALLOWED" << std::endl;
                 SimpleResponse response(ErrorCode::NOT_AUTHENTICATED);
                 MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE | Flags::ERROR, sizeof(response));
                 SendResponse(conn_id, resp_header, &response, sizeof(response));
                 return;
             }
 
-            auto* verifier = GetHmacVerifier(conn_id);
-            if (verifier && !verifier->VerifyPrefix(header, body, body_len))
+            auto auth_result = ValidateAndTouchSession(conn_id);
+            if (!auth_result.session)
             {
-                std::cout << "[DEBUG] OnMessage conn=" << conn_id << " INVALID HMAC PREFIX" << std::endl;
+                SetAuthenticated(conn_id, false);
+                RemoveSessionKey(conn_id);
+                SimpleResponse response(ErrorCode::AUTH_EXPIRED);
+                MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE | Flags::ERROR, sizeof(response));
+                SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
+            if (auth_result.verifier && !auth_result.verifier->VerifyPrefix(header, body, body_len))
+            {
                 SimpleResponse response(ErrorCode::INVALID_SIGNATURE);
                 MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE | Flags::ERROR, sizeof(response));
                 SendResponse(conn_id, resp_header, &response, sizeof(response));
@@ -285,14 +357,13 @@ void ProtocolServer::OnMessage(uint16_t conn_id, const MsgHeader& header, const 
 
 void ProtocolServer::OnConnect(uint16_t conn_id)
 {
-    std::cout << "[DEBUG] OnConnect conn=" << conn_id << std::endl;
     std::lock_guard<std::mutex> lock(_state_mutex);
     _authenticated_connections[conn_id] = false;
+    conn_ack_states_.try_emplace(conn_id);
 }
 
 void ProtocolServer::OnDisconnect(uint16_t conn_id)
 {
-    std::cout << "[DEBUG] OnDisconnect conn=" << conn_id << std::endl;
     RemoveConnection(conn_id);
 }
 
@@ -300,7 +371,6 @@ void ProtocolServer::SetAuthenticated(uint16_t conn_id, bool authenticated)
 {
     std::lock_guard<std::mutex> lock(_state_mutex);
     _authenticated_connections[conn_id] = authenticated;
-    std::cout << "[DEBUG] SetAuthenticated conn=" << conn_id << " authenticated=" << authenticated << std::endl;
 }
 
 bool ProtocolServer::IsAuthenticated(uint16_t conn_id) const
@@ -314,7 +384,6 @@ void ProtocolServer::SetSessionKey(uint16_t conn_id, const uint8_t* key, size_t 
 {
     std::lock_guard<std::mutex> lock(_state_mutex);
     _hmac_verifiers[conn_id] = std::make_unique<HmacVerifier>(key, key_len);
-    std::cout << "[DEBUG] SetSessionKey conn=" << conn_id << " key_len=" << key_len << std::endl;
 }
 
 HmacVerifier* ProtocolServer::GetHmacVerifier(uint16_t conn_id)
@@ -337,11 +406,24 @@ void ProtocolServer::RemoveSessionKey(uint16_t conn_id)
     _hmac_verifiers.erase(conn_id);
 }
 
-void ProtocolServer::RegisterApiKey(const std::string& api_key_id, const std::string& api_key_secret)
+void ProtocolServer::RegisterApiKey(const std::string& api_key_id, const std::string& api_key_secret,
+                                     uint64_t account_id, uint8_t role)
 {
     std::lock_guard<std::mutex> lock(_state_mutex);
-    _api_keys[api_key_id] = api_key_secret;
-    std::cout << "[DEBUG] RegisterApiKey id=" << api_key_id << std::endl;
+    ApiKeyInfo info;
+    info.secret = api_key_secret;
+    info.account_id = account_id;
+    info.role = static_cast<Role>(role);
+    _api_keys[api_key_id] = info;
+}
+
+ApiKeyInfo ProtocolServer::GetApiKeyInfo(const std::string& api_key_id) const
+{
+    std::lock_guard<std::mutex> lock(_state_mutex);
+    auto it = _api_keys.find(api_key_id);
+    if (it != _api_keys.end())
+        return it->second;
+    return ApiKeyInfo{};
 }
 
 std::string ProtocolServer::GetApiKeySecret(const std::string& api_key_id) const
@@ -349,8 +431,57 @@ std::string ProtocolServer::GetApiKeySecret(const std::string& api_key_id) const
     std::lock_guard<std::mutex> lock(_state_mutex);
     auto it = _api_keys.find(api_key_id);
     if (it != _api_keys.end())
-        return it->second;
+        return it->second.secret;
     return "";
+}
+
+bool ProtocolServer::ValidateSession(uint16_t conn_id)
+{
+    auto session = _session_manager.FindByConnId(conn_id);
+    return session != nullptr;
+}
+
+void ProtocolServer::TouchSession(uint16_t conn_id)
+{
+    auto session = _session_manager.FindByConnId(conn_id);
+    if (session)
+    {
+        std::array<uint8_t, 32> token = session->token;
+        _session_manager.Touch(token);
+    }
+}
+
+ProtocolServer::AuthResult ProtocolServer::ValidateAndTouchSession(uint16_t conn_id)
+{
+    AuthResult result;
+    result.session = _session_manager.ValidateAndTouchByConnId(conn_id);
+    if (result.session)
+    {
+        std::lock_guard<std::mutex> lock(_state_mutex);
+        result.verifier = GetHmacVerifierLocked(conn_id);
+    }
+    return result;
+}
+
+void ProtocolServer::CleanupOldConnection(uint16_t old_conn_id)
+{
+    std::lock_guard<std::mutex> lock(_state_mutex);
+    _order_book_subscriptions.erase(old_conn_id);
+    _order_subscriptions.erase(old_conn_id);
+    _hmac_verifiers.erase(old_conn_id);
+    _authenticated_connections.erase(old_conn_id);
+}
+
+void ProtocolServer::RecordAck(uint16_t conn_id, uint64_t ack_seq)
+{
+    std::lock_guard<std::mutex> lock(_state_mutex);
+    auto it = conn_ack_states_.find(conn_id);
+    if (it != conn_ack_states_.end())
+    {
+        uint64_t current = it->second.last_acked_seq.load(std::memory_order_relaxed);
+        if (ack_seq > current)
+            it->second.last_acked_seq.store(ack_seq, std::memory_order_relaxed);
+    }
 }
 
 } // namespace Protocol

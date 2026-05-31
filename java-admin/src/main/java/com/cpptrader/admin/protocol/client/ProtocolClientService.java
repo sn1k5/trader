@@ -1,6 +1,7 @@
 package com.cpptrader.admin.protocol.client;
 
 import com.cpptrader.admin.config.ProtocolConfig;
+import com.cpptrader.admin.idempotent.DedupTableService;
 import com.cpptrader.admin.protocol.ProtocolConstants;
 import com.cpptrader.admin.protocol.events.OrderBookUpdateEvent;
 import com.cpptrader.admin.protocol.events.OrderUpdateEvent;
@@ -30,6 +31,7 @@ import java.util.function.Consumer;
 public class ProtocolClientService {
 
     private final ProtocolConfig config;
+    private final DedupTableService dedupTableService;
     private INetworkBackend backend;
     private ProtocolStreamSubscriber streamSubscriber;
 
@@ -48,13 +50,14 @@ public class ProtocolClientService {
     private volatile long lastRecvTime = System.currentTimeMillis();
     private volatile long lastSendTime = 0;
 
-    public ProtocolClientService(ProtocolConfig config) {
+    public ProtocolClientService(ProtocolConfig config, DedupTableService dedupTableService) {
         this.config = config;
+        this.dedupTableService = dedupTableService;
     }
 
     @PostConstruct
     public void init() {
-        streamSubscriber = new ProtocolStreamSubscriber(this);
+        streamSubscriber = new ProtocolStreamSubscriber(this, dedupTableService);
         // Connect asynchronously to avoid blocking Spring Boot startup
         Thread connectThread = new Thread(() -> {
             try {

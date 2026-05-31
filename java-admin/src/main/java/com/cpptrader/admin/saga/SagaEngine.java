@@ -21,6 +21,13 @@ public class SagaEngine {
     @Transactional
     public SagaContext execute(SagaDefinition definition) {
         String sagaId = UUID.randomUUID().toString();
+
+        List<SagaInstance> runningInstances = sagaInstanceRepository.findBySagaNameAndStatus(
+            definition.getSagaName(), SagaInstance.SagaStatus.RUNNING.getValue());
+        if (!runningInstances.isEmpty()) {
+            throw new RuntimeException("Saga already running: " + definition.getSagaName());
+        }
+
         SagaContext context = new SagaContext(sagaId);
 
         SagaInstance instance = new SagaInstance();
@@ -94,32 +101,49 @@ public class SagaEngine {
         boolean compensateFailed = false;
         for (int i = failedStepIndex - 1; i >= 0; i--) {
             SagaStep step = definition.getSteps().get(i);
-            try {
-                log.info("Compensating step {}: {}", i, step.getStepName());
-                SagaStepResult result = step.getCompensate().apply(context, SagaStepResult.success());
+            boolean stepCompensated = false;
+            int maxRetries = 3;
 
-                List<SagaStepLog> logs = sagaStepLogRepository.findBySagaIdOrderByStepOrderAsc(instance.getSagaId());
-                if (i < logs.size()) {
-                    SagaStepLog stepLog = logs.get(i);
-                    stepLog.setStatus(result.isSuccess() ? SagaStepLog.StepStatus.COMPENSATED.getValue() : SagaStepLog.StepStatus.COMPENSATE_FAILED.getValue());
-                    sagaStepLogRepository.save(stepLog);
-                }
+            for (int retry = 0; retry <= maxRetries; retry++) {
+                try {
+                    log.info("Compensating step {}: {} (attempt {}/{})", i, step.getStepName(), retry + 1, maxRetries + 1);
+                    SagaStepResult result = step.getCompensate().apply(context, SagaStepResult.success());
 
-                if (!result.isSuccess()) {
-                    compensateFailed = true;
-                    log.error("Compensation failed for step: {}", step.getStepName());
+                    List<SagaStepLog> logs = sagaStepLogRepository.findBySagaIdOrderByStepOrderAsc(instance.getSagaId());
+                    if (i < logs.size()) {
+                        SagaStepLog stepLog = logs.get(i);
+                        stepLog.setStatus(result.isSuccess() ? SagaStepLog.StepStatus.COMPENSATED.getValue() : SagaStepLog.StepStatus.COMPENSATE_FAILED.getValue());
+                        sagaStepLogRepository.save(stepLog);
+                    }
+
+                    if (result.isSuccess()) {
+                        stepCompensated = true;
+                        break;
+                    }
+
+                    if (retry < maxRetries) {
+                        Thread.sleep(100L * (retry + 1));
+                    }
+                } catch (Exception e) {
+                    log.error("Compensation exception for step {} (attempt {}): {}", step.getStepName(), retry + 1, e.getMessage(), e);
+
+                    List<SagaStepLog> logs = sagaStepLogRepository.findBySagaIdOrderByStepOrderAsc(instance.getSagaId());
+                    if (i < logs.size()) {
+                        SagaStepLog stepLog = logs.get(i);
+                        stepLog.setStatus(SagaStepLog.StepStatus.COMPENSATE_FAILED.getValue());
+                        stepLog.setResponseData(e.getMessage());
+                        sagaStepLogRepository.save(stepLog);
+                    }
+
+                    if (retry < maxRetries) {
+                        try { Thread.sleep(100L * (retry + 1)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    }
                 }
-            } catch (Exception e) {
+            }
+
+            if (!stepCompensated) {
                 compensateFailed = true;
-                log.error("Compensation exception for step {}: {}", step.getStepName(), e.getMessage(), e);
-
-                List<SagaStepLog> logs = sagaStepLogRepository.findBySagaIdOrderByStepOrderAsc(instance.getSagaId());
-                if (i < logs.size()) {
-                    SagaStepLog stepLog = logs.get(i);
-                    stepLog.setStatus(SagaStepLog.StepStatus.COMPENSATE_FAILED.getValue());
-                    stepLog.setResponseData(e.getMessage());
-                    sagaStepLogRepository.save(stepLog);
-                }
+                log.error("Compensation failed for step after {} retries: {}", maxRetries + 1, step.getStepName());
             }
         }
 

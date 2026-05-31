@@ -5,6 +5,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 
 public final class HmacSigner {
 
@@ -19,14 +20,7 @@ public final class HmacSigner {
 
     public static byte[] computeFullHmac(byte[] sessionKey, int sequence, byte msgType, byte flags, short length, byte[] body) {
         byte[] input = buildSignInput(sequence, msgType, flags, length, body);
-        try {
-            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
-            SecretKeySpec keySpec = new SecretKeySpec(sessionKey, HMAC_ALGORITHM);
-            mac.init(keySpec);
-            return mac.doFinal(input);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to compute HMAC signature", e);
-        }
+        return computeHmacSHA256(sessionKey, input);
     }
 
     public static boolean verifyHmacPrefix(byte[] sessionKey, short expectedPrefix, int sequence, byte msgType, byte flags, short length, byte[] body) {
@@ -46,5 +40,39 @@ public final class HmacSigner {
             buf.put(body);
         }
         return buf.array();
+    }
+
+    public static String buildAuthSignMessage(long timestampMs, byte[] nonce, String apiKeyId) {
+        String timestampHex = String.format("%016x", timestampMs);
+        String nonceHex = HexFormat.of().formatHex(nonce);
+        return timestampHex + nonceHex + apiKeyId;
+    }
+
+    public static byte[] computeAuthSignature(byte[] apiKeySecret, long timestampMs, byte[] nonce, String apiKeyId) {
+        String message = buildAuthSignMessage(timestampMs, nonce, apiKeyId);
+        return computeHmacSHA256(apiKeySecret, message.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static boolean verifyAuthSignature(byte[] apiKeySecret, long timestampMs, byte[] nonce, String apiKeyId, byte[] providedSignature) {
+        byte[] computed = computeAuthSignature(apiKeySecret, timestampMs, nonce, apiKeyId);
+        if (computed.length != providedSignature.length) {
+            return false;
+        }
+        int xor = 0;
+        for (int i = 0; i < computed.length; i++) {
+            xor |= computed[i] ^ providedSignature[i];
+        }
+        return xor == 0;
+    }
+
+    private static byte[] computeHmacSHA256(byte[] key, byte[] data) {
+        try {
+            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+            SecretKeySpec keySpec = new SecretKeySpec(key, HMAC_ALGORITHM);
+            mac.init(keySpec);
+            return mac.doFinal(data);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to compute HMAC signature", e);
+        }
     }
 }

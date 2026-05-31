@@ -9,12 +9,11 @@
 #include "trader/protocol/request_handler.h"
 #include "trader/wal/wal.h"
 
+#include <array>
 #include <cstring>
 #include <iostream>
 #include <atomic>
 #include <random>
-#include <iomanip>
-#include <sstream>
 
 namespace CppTrader
 {
@@ -29,6 +28,13 @@ namespace CppTrader
         RequestHandler::RequestHandler(ProtocolServer &server, CppTrader::Matching::MarketManager &market,
                                        std::shared_ptr<CppTrader::WAL::WALWriter> wal_writer)
             : _server(server), _market(market), _wal_writer(wal_writer), _trade_id_generator(0)
+        {
+        }
+
+        RequestHandler::RequestHandler(ProtocolServer &server, CppTrader::Matching::MarketManager &market,
+                                       std::shared_ptr<CppTrader::WAL::WALWriter> wal_writer,
+                                       std::shared_ptr<CppTrader::Snapshot::SnapshotManager> snapshot_manager)
+            : _server(server), _market(market), _wal_writer(wal_writer), _snapshot_manager(snapshot_manager), _trade_id_generator(0)
         {
         }
 
@@ -121,11 +127,35 @@ namespace CppTrader
             _server.RegisterHandler(MsgType::RECONCILE_REQUEST,
                                     [this](uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
                                     { HandleReconcileRequest(conn_id, header, body, body_len); });
+
+            _server.RegisterHandler(MsgType::SNAPSHOT_REQUEST,
+                                    [this](uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
+                                    { HandleSnapshot(conn_id, header, body, body_len); });
+        }
+
+        bool RequestHandler::CheckRole(uint16_t conn_id, Role minimum_role)
+        {
+            auto session = _server.GetSessionManager().FindByConnId(conn_id);
+            if (!session)
+                return false;
+
+            Role role = session->role;
+
+            switch (minimum_role)
+            {
+            case Role::ADMIN:
+                return role == Role::ADMIN;
+            case Role::TRADER:
+                return role == Role::ADMIN || role == Role::TRADER || role == Role::QUANTBOT;
+            case Role::VIEWER:
+                return true;
+            default:
+                return false;
+            }
         }
 
         void RequestHandler::onAddSymbol(const CppTrader::Matching::Symbol &symbol)
         {
-            std::cout << "[DEBUG] onAddSymbol id=" << symbol.Id << std::endl;
             SymbolResponse response{static_cast<uint8_t>(ErrorCode::OK), ConvertSymbol(symbol)};
             MsgHeader header(MsgType::SYMBOL_RESPONSE, Flags::PUSH, sizeof(response));
             _server.Broadcast(header, &response, sizeof(response));
@@ -133,7 +163,6 @@ namespace CppTrader
 
         void RequestHandler::onDeleteSymbol(const CppTrader::Matching::Symbol &symbol)
         {
-            std::cout << "[DEBUG] onDeleteSymbol id=" << symbol.Id << std::endl;
             SymbolResponse response{static_cast<uint8_t>(ErrorCode::OK), ConvertSymbol(symbol)};
             MsgHeader header(MsgType::SYMBOL_RESPONSE, Flags::PUSH, sizeof(response));
             _server.Broadcast(header, &response, sizeof(response));
@@ -202,9 +231,6 @@ namespace CppTrader
 
         void RequestHandler::onAddOrder(const CppTrader::Matching::Order &order)
         {
-            std::cout << "[DEBUG] onAddOrder id=" << order.Id << " symbol=" << order.SymbolId
-                      << " side=" << (order.IsBuy() ? "BUY" : "SELL")
-                      << " price=" << order.Price << " qty=" << order.Quantity << std::endl;
             OrderUpdateEvent event = { 1, ConvertOrder(order), 0, 0 };
             MsgHeader header(MsgType::ORDER_UPDATE_EVENT, Flags::PUSH, sizeof(event));
             _server.BroadcastToSymbol(order.SymbolId, header, &event, sizeof(event));
@@ -212,9 +238,6 @@ namespace CppTrader
 
         void RequestHandler::onUpdateOrder(const CppTrader::Matching::Order &order)
         {
-            std::cout << "[DEBUG] onUpdateOrder id=" << order.Id << " symbol=" << order.SymbolId
-                      << " side=" << (order.IsBuy() ? "BUY" : "SELL")
-                      << " price=" << order.Price << " qty=" << order.Quantity << std::endl;
             OrderUpdateEvent event = { 2, ConvertOrder(order), 0, 0 };
             MsgHeader header(MsgType::ORDER_UPDATE_EVENT, Flags::PUSH, sizeof(event));
             _server.BroadcastToSymbol(order.SymbolId, header, &event, sizeof(event));
@@ -222,7 +245,6 @@ namespace CppTrader
 
         void RequestHandler::onDeleteOrder(const CppTrader::Matching::Order &order)
         {
-            std::cout << "[DEBUG] onDeleteOrder id=" << order.Id << " symbol=" << order.SymbolId << std::endl;
             OrderUpdateEvent event = { 3, ConvertOrder(order), 0, 0 };
             MsgHeader header(MsgType::ORDER_UPDATE_EVENT, Flags::PUSH, sizeof(event));
             _server.BroadcastToSymbol(order.SymbolId, header, &event, sizeof(event));
@@ -230,8 +252,6 @@ namespace CppTrader
 
         void RequestHandler::onExecuteOrder(const CppTrader::Matching::Order &order, uint64_t price, uint64_t quantity)
         {
-            std::cout << "[DEBUG] onExecuteOrder id=" << order.Id << " symbol=" << order.SymbolId
-                      << " price=" << price << " qty=" << quantity << std::endl;
 
             if (_wal_writer)
             {
@@ -254,6 +274,15 @@ namespace CppTrader
 
         void RequestHandler::HandleAddSymbol(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
+            if (!CheckRole(conn_id, Role::ADMIN))
+            {
+                SymbolResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), SymbolProto{}};
+                MsgHeader resp_header(MsgType::SYMBOL_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(AddSymbolRequest))
             {
                 SymbolResponse response{static_cast<uint8_t>(ErrorCode::ORDER_PARAMETER_INVALID), SymbolProto{}};
@@ -275,6 +304,15 @@ namespace CppTrader
 
         void RequestHandler::HandleDeleteSymbol(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
+            if (!CheckRole(conn_id, Role::ADMIN))
+            {
+                SimpleResponse response(ErrorCode::NOT_AUTHORIZED);
+                MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(DeleteSymbolRequest))
             {
                 SimpleResponse response(ErrorCode::ORDER_PARAMETER_INVALID);
@@ -325,6 +363,15 @@ namespace CppTrader
 
         void RequestHandler::HandleAddOrderBook(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
+            if (!CheckRole(conn_id, Role::ADMIN))
+            {
+                SimpleResponse response(ErrorCode::NOT_AUTHORIZED);
+                MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(AddOrderBookRequest))
             {
                 SimpleResponse response(ErrorCode::ORDER_PARAMETER_INVALID);
@@ -354,6 +401,15 @@ namespace CppTrader
 
         void RequestHandler::HandleDeleteOrderBook(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
+            if (!CheckRole(conn_id, Role::ADMIN))
+            {
+                SimpleResponse response(ErrorCode::NOT_AUTHORIZED);
+                MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(DeleteOrderBookRequest))
             {
                 SimpleResponse response(ErrorCode::ORDER_PARAMETER_INVALID);
@@ -442,7 +498,14 @@ namespace CppTrader
 
         void RequestHandler::HandleAddOrder(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleAddOrder conn=" << conn_id << std::endl;
+            if (!CheckRole(conn_id, Role::TRADER))
+            {
+                OrderResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), OrderProto{}};
+                MsgHeader resp_header(MsgType::ORDER_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
 
             if (body_len < sizeof(AddOrderRequest))
             {
@@ -455,6 +518,10 @@ namespace CppTrader
 
             const auto *request = reinterpret_cast<const AddOrderRequest *>(body);
             auto order = ConvertOrderProto(request->Order);
+
+            auto session = _server.GetSessionManager().FindByConnId(conn_id);
+            if (session)
+                order.AccountId = session->account_id;
 
             if (_wal_writer)
             {
@@ -471,7 +538,15 @@ namespace CppTrader
 
         void RequestHandler::HandleReduceOrder(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleReduceOrder conn=" << conn_id << std::endl;
+            if (!CheckRole(conn_id, Role::TRADER))
+            {
+                OrderResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), OrderProto{}};
+                MsgHeader resp_header(MsgType::ORDER_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(ReduceOrderRequest))
             {
                 OrderResponse response{static_cast<uint8_t>(ErrorCode::ORDER_PARAMETER_INVALID), OrderProto{}};
@@ -500,7 +575,15 @@ namespace CppTrader
 
         void RequestHandler::HandleModifyOrder(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleModifyOrder conn=" << conn_id << std::endl;
+            if (!CheckRole(conn_id, Role::TRADER))
+            {
+                OrderResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), OrderProto{}};
+                MsgHeader resp_header(MsgType::ORDER_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(ModifyOrderRequest))
             {
                 OrderResponse response{static_cast<uint8_t>(ErrorCode::ORDER_PARAMETER_INVALID), OrderProto{}};
@@ -522,6 +605,15 @@ namespace CppTrader
 
         void RequestHandler::HandleMitigateOrder(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
+            if (!CheckRole(conn_id, Role::TRADER))
+            {
+                OrderResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), OrderProto{}};
+                MsgHeader resp_header(MsgType::ORDER_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(MitigateOrderRequest))
             {
                 OrderResponse response{static_cast<uint8_t>(ErrorCode::ORDER_PARAMETER_INVALID), OrderProto{}};
@@ -543,7 +635,15 @@ namespace CppTrader
 
         void RequestHandler::HandleReplaceOrder(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleReplaceOrder conn=" << conn_id << std::endl;
+            if (!CheckRole(conn_id, Role::TRADER))
+            {
+                OrderResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), OrderProto{}};
+                MsgHeader resp_header(MsgType::ORDER_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(ReplaceOrderRequest))
             {
                 OrderResponse response{static_cast<uint8_t>(ErrorCode::ORDER_PARAMETER_INVALID), OrderProto{}};
@@ -565,12 +665,15 @@ namespace CppTrader
 
             CppTrader::Matching::Order new_order_proto(
                 request->NewId,
-                old_order ? old_order->SymbolId : 0,
+                old_order ? old_order->SymbolId : 0u,
+                uint64_t(0),
+                CppTrader::Matching::STPPolicy::CANCEL_NEW,
                 CppTrader::Matching::OrderType::LIMIT,
                 CppTrader::Matching::OrderSide::BUY,
                 request->NewPrice,
-                0,
-                request->NewQuantity
+                uint64_t(0),
+                request->NewQuantity,
+                CppTrader::Matching::OrderTimeInForce::GTC
             );
             if (_wal_writer && error == CppTrader::Matching::ErrorCode::OK)
             {
@@ -586,7 +689,15 @@ namespace CppTrader
 
         void RequestHandler::HandleDeleteOrder(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleDeleteOrder conn=" << conn_id << std::endl;
+            if (!CheckRole(conn_id, Role::TRADER))
+            {
+                OrderResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), OrderProto{}};
+                MsgHeader resp_header(MsgType::ORDER_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(DeleteOrderRequest))
             {
                 OrderResponse response{static_cast<uint8_t>(ErrorCode::ORDER_PARAMETER_INVALID), OrderProto{}};
@@ -614,7 +725,15 @@ namespace CppTrader
 
         void RequestHandler::HandleExecuteOrder(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleExecuteOrder conn=" << conn_id << std::endl;
+            if (!CheckRole(conn_id, Role::ADMIN))
+            {
+                OrderResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), OrderProto{}};
+                MsgHeader resp_header(MsgType::ORDER_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             if (body_len < sizeof(ExecuteOrderRequest))
             {
                 OrderResponse response{static_cast<uint8_t>(ErrorCode::ORDER_PARAMETER_INVALID), OrderProto{}};
@@ -666,10 +785,18 @@ namespace CppTrader
 
         void RequestHandler::HandleEnableMatching(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
+            if (!CheckRole(conn_id, Role::ADMIN))
+            {
+                SimpleResponse response(ErrorCode::NOT_AUTHORIZED);
+                MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             (void)body;
             (void)body_len;
 
-            std::cout << "[DEBUG] HandleEnableMatching conn=" << conn_id << std::endl;
 
             _market.EnableMatching();
 
@@ -681,10 +808,18 @@ namespace CppTrader
 
         void RequestHandler::HandleDisableMatching(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
+            if (!CheckRole(conn_id, Role::ADMIN))
+            {
+                SimpleResponse response(ErrorCode::NOT_AUTHORIZED);
+                MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
             (void)body;
             (void)body_len;
 
-            std::cout << "[DEBUG] HandleDisableMatching conn=" << conn_id << std::endl;
 
             _market.DisableMatching();
 
@@ -696,7 +831,6 @@ namespace CppTrader
 
         void RequestHandler::HandleSubscribeOrderBook(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleSubscribeOrderBook conn=" << conn_id << std::endl;
             if (body_len < sizeof(SubscribeRequest))
             {
                 SimpleResponse response(ErrorCode::ORDER_PARAMETER_INVALID);
@@ -717,7 +851,6 @@ namespace CppTrader
 
         void RequestHandler::HandleSubscribeOrders(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleSubscribeOrders conn=" << conn_id << std::endl;
             if (body_len < sizeof(SubscribeRequest))
             {
                 SimpleResponse response(ErrorCode::ORDER_PARAMETER_INVALID);
@@ -741,7 +874,6 @@ namespace CppTrader
             (void)body;
             (void)body_len;
 
-            std::cout << "[DEBUG] HandleHeartbeat conn=" << conn_id << std::endl;
 
             MsgHeader resp_header(MsgType::HEARTBEAT_RESP, Flags::HEARTBEAT, 0);
             resp_header.Sequence = header.Sequence;
@@ -750,112 +882,117 @@ namespace CppTrader
 
         void RequestHandler::HandleAuth(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleAuth conn=" << conn_id << std::endl;
 
-            if (body_len < sizeof(AuthRequest))
-            {
-                AuthResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHENTICATED), {}};
+            auto send_auth_error = [this, conn_id, &header](ErrorCode ec) {
+                AuthResponse response{static_cast<uint8_t>(ec), {}, 0, 0};
                 MsgHeader resp_header(MsgType::AUTH_RESPONSE, Flags::RESPONSE, sizeof(response));
                 resp_header.Sequence = header.Sequence;
                 _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+            };
+
+            if (body_len < sizeof(AuthRequest))
+            {
+                send_auth_error(ErrorCode::NOT_AUTHENTICATED);
                 return;
             }
 
             const auto *request = reinterpret_cast<const AuthRequest *>(body);
 
+            std::array<uint8_t, 32> recovery_token;
+            std::memcpy(recovery_token.data(), request->RecoveryToken, 32);
+            bool has_recovery = false;
+            for (auto b : recovery_token)
+            {
+                if (b != 0)
+                {
+                    has_recovery = true;
+                    break;
+                }
+            }
+
+            if (has_recovery)
+            {
+                auto recover_result = _server.GetSessionManager().Recover(recovery_token, conn_id);
+                if (recover_result.session)
+                {
+                    if (recover_result.had_old_conn)
+                    {
+                        _server.CleanupOldConnection(recover_result.old_conn_id);
+                    }
+                    _server.SetAuthenticated(conn_id, true);
+                    _server.SetSessionKey(conn_id, recover_result.session->token.data(), recover_result.session->token.size());
+
+                    AuthResponse response{0, {}, 0, 0};
+                    std::memcpy(response.SessionToken, recover_result.session->token.data(), recover_result.session->token.size());
+                    response.AccountId = recover_result.session->account_id;
+                    response.Role = static_cast<uint8_t>(recover_result.session->role);
+                    MsgHeader resp_header(MsgType::AUTH_RESPONSE, Flags::RESPONSE, sizeof(response));
+                    resp_header.Sequence = header.Sequence;
+                    _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                    return;
+                }
+            }
+
             std::string api_key_id(request->ApiKeyId, strnlen(request->ApiKeyId, sizeof(request->ApiKeyId)));
             if (api_key_id.empty())
             {
-                AuthResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHENTICATED), {}};
-                MsgHeader resp_header(MsgType::AUTH_RESPONSE, Flags::RESPONSE, sizeof(response));
-                resp_header.Sequence = header.Sequence;
-                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                send_auth_error(ErrorCode::NOT_AUTHENTICATED);
                 return;
             }
 
-            std::string api_key_secret = _server.GetApiKeySecret(api_key_id);
-            if (api_key_secret.empty())
+            ApiKeyInfo api_key_info = _server.GetApiKeyInfo(api_key_id);
+            if (api_key_info.secret.empty())
             {
-                std::cout << "[DEBUG] HandleAuth: unknown ApiKeyId=" << api_key_id << std::endl;
-                AuthResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHENTICATED), {}};
-                MsgHeader resp_header(MsgType::AUTH_RESPONSE, Flags::RESPONSE, sizeof(response));
-                resp_header.Sequence = header.Sequence;
-                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                send_auth_error(ErrorCode::NOT_AUTHENTICATED);
                 return;
             }
 
             uint64_t timestamp = static_cast<uint64_t>(request->Timestamp);
             if (!_server.GetAntiReplayChecker().CheckTimestamp(timestamp, 30000))
             {
-                std::cout << "[DEBUG] HandleAuth: timestamp expired conn=" << conn_id << std::endl;
-                AuthResponse response{static_cast<uint8_t>(ErrorCode::AUTH_EXPIRED), {}};
-                MsgHeader resp_header(MsgType::AUTH_RESPONSE, Flags::RESPONSE, sizeof(response));
-                resp_header.Sequence = header.Sequence;
-                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                send_auth_error(ErrorCode::AUTH_EXPIRED);
                 return;
             }
 
             if (!_server.GetAntiReplayChecker().CheckNonce(reinterpret_cast<const uint8_t *>(request->Nonce), 16, timestamp))
             {
-                std::cout << "[DEBUG] HandleAuth: replay detected conn=" << conn_id << std::endl;
-                AuthResponse response{static_cast<uint8_t>(ErrorCode::REPLAY_DETECTED), {}};
-                MsgHeader resp_header(MsgType::AUTH_RESPONSE, Flags::RESPONSE, sizeof(response));
-                resp_header.Sequence = header.Sequence;
-                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                send_auth_error(ErrorCode::REPLAY_DETECTED);
                 return;
             }
 
-            std::stringstream ts_hex;
-            ts_hex << std::hex << std::setfill('0') << std::setw(16) << timestamp;
-            std::string timestamp_hex = ts_hex.str();
-
-            std::stringstream nonce_hex;
-            nonce_hex << std::hex << std::setfill('0');
-            for (size_t i = 0; i < 16; ++i)
-                nonce_hex << std::setw(2) << static_cast<int>(static_cast<uint8_t>(request->Nonce[i]));
-            std::string nonce_hex_str = nonce_hex.str();
-
-            std::string sign_message = timestamp_hex + nonce_hex_str + api_key_id;
-
-            auto computed = HmacVerifier::HmacSHA256(
-                reinterpret_cast<const uint8_t *>(api_key_secret.data()), api_key_secret.size(),
-                reinterpret_cast<const uint8_t *>(sign_message.data()), sign_message.size());
-
-            uint8_t xor_result = 0;
-            for (size_t i = 0; i < 32; ++i)
-                xor_result |= computed[i] ^ static_cast<uint8_t>(request->Signature[i]);
-            bool signature_valid = (xor_result == 0);
-            if (!signature_valid)
+            if (!HmacVerifier::VerifyAuthSignature(
+                    reinterpret_cast<const uint8_t *>(api_key_info.secret.data()), api_key_info.secret.size(),
+                    timestamp,
+                    reinterpret_cast<const uint8_t *>(request->Nonce), 16,
+                    api_key_id,
+                    reinterpret_cast<const uint8_t *>(request->Signature), 32))
             {
-                std::cout << "[DEBUG] HandleAuth: invalid signature conn=" << conn_id << std::endl;
-                AuthResponse response{static_cast<uint8_t>(ErrorCode::INVALID_SIGNATURE), {}};
-                MsgHeader resp_header(MsgType::AUTH_RESPONSE, Flags::RESPONSE, sizeof(response));
-                resp_header.Sequence = header.Sequence;
-                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                send_auth_error(ErrorCode::INVALID_SIGNATURE);
                 return;
             }
 
-            std::random_device rd;
-            std::uniform_int_distribution<uint8_t> dist(0, 255);
-            std::array<uint8_t, 32> session_token;
-            for (auto &b : session_token)
-                b = dist(rd);
+            auto session = _server.GetSessionManager().Create(api_key_info.account_id, api_key_info.role, conn_id);
+            if (!session)
+            {
+                send_auth_error(ErrorCode::NOT_AUTHENTICATED);
+                return;
+            }
 
             _server.SetAuthenticated(conn_id, true);
-            _server.SetSessionKey(conn_id, session_token.data(), session_token.size());
+            _server.SetSessionKey(conn_id, session->token.data(), session->token.size());
 
-            AuthResponse response{0, {}};
-            std::memcpy(response.SessionToken, session_token.data(), session_token.size());
+            AuthResponse response{0, {}, 0, 0};
+            std::memcpy(response.SessionToken, session->token.data(), session->token.size());
+            response.AccountId = api_key_info.account_id;
+            response.Role = static_cast<uint8_t>(api_key_info.role);
             MsgHeader resp_header(MsgType::AUTH_RESPONSE, Flags::RESPONSE, sizeof(response));
             resp_header.Sequence = header.Sequence;
             _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
 
-            std::cout << "[DEBUG] HandleAuth: success conn=" << conn_id << " api_key_id=" << api_key_id << std::endl;
         }
 
         void RequestHandler::HandleEventAck(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleEventAck conn=" << conn_id << std::endl;
 
             if (body_len < sizeof(EventAck))
             {
@@ -867,10 +1004,9 @@ namespace CppTrader
             }
 
             const auto *request = reinterpret_cast<const EventAck *>(body);
-            std::cout << "[DEBUG] EventAck: event_id=" << request->EventId
-                      << " event_type=" << request->EventType << std::endl;
 
-            // Mark event as acknowledged (currently just log it)
+            _server.RecordAck(conn_id, request->EventId);
+
             SimpleResponse response(ErrorCode::OK);
             MsgHeader resp_header(MsgType::SIMPLE_RESPONSE, Flags::RESPONSE, sizeof(response));
             resp_header.Sequence = header.Sequence;
@@ -879,7 +1015,6 @@ namespace CppTrader
 
         void RequestHandler::HandleReconcileRequest(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
         {
-            std::cout << "[DEBUG] HandleReconcileRequest conn=" << conn_id << std::endl;
 
             if (body_len < sizeof(ReconcileRequest))
             {
@@ -932,6 +1067,55 @@ namespace CppTrader
             _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
         }
 
+        void RequestHandler::HandleSnapshot(uint16_t conn_id, const MsgHeader &header, const uint8_t *body, size_t body_len)
+        {
+            if (!CheckRole(conn_id, Role::ADMIN))
+            {
+                SnapshotResponse response{static_cast<uint8_t>(ErrorCode::NOT_AUTHORIZED), 0, 0, 0, 0};
+                MsgHeader resp_header(MsgType::SNAPSHOT_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
+            (void)body;
+            (void)body_len;
+
+            if (!_snapshot_manager)
+            {
+                SnapshotResponse response{1, 0, 0, 0, 0};
+                MsgHeader resp_header(MsgType::SNAPSHOT_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+                return;
+            }
+
+            _snapshot_manager->SetPauseMatchingCallback([this]() { _market.DisableMatching(); });
+            _snapshot_manager->SetResumeMatchingCallback([this]() { _market.EnableMatching(); });
+
+            uint64_t wal_lsn = _wal_writer ? _wal_writer->CurrentLSN() : 0;
+            bool success = _snapshot_manager->TakeSnapshot(_market, wal_lsn);
+
+            if (success)
+            {
+                uint64_t timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                SnapshotResponse response{0, timestamp_ns, wal_lsn,
+                    static_cast<uint32_t>(_market.symbols().size()),
+                    static_cast<uint32_t>(_market.orders().size())};
+                MsgHeader resp_header(MsgType::SNAPSHOT_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+            }
+            else
+            {
+                SnapshotResponse response{1, 0, 0, 0, 0};
+                MsgHeader resp_header(MsgType::SNAPSHOT_RESPONSE, Flags::RESPONSE, sizeof(response));
+                resp_header.Sequence = header.Sequence;
+                _server.SendResponse(conn_id, resp_header, &response, sizeof(response));
+            }
+        }
+
         OrderProto RequestHandler::ConvertOrder(const CppTrader::Matching::Order &order)
         {
             OrderProto proto;
@@ -949,6 +1133,8 @@ namespace CppTrader
             proto.Slippage = order.Slippage;
             proto.TrailingDistance = order.TrailingDistance;
             proto.TrailingStep = order.TrailingStep;
+            proto.AccountId = order.AccountId;
+            proto.StpPolicy = static_cast<uint8_t>(order.StpPolicy);
             return proto;
         }
 
@@ -971,6 +1157,8 @@ namespace CppTrader
             return CppTrader::Matching::Order(
                 proto.Id,
                 proto.SymbolId,
+                proto.AccountId,
+                ConvertSTPPolicy(static_cast<Protocol::STPPolicy>(proto.StpPolicy)),
                 ConvertOrderType(static_cast<OrderType>(proto.Type)),
                 ConvertOrderSide(static_cast<OrderSide>(proto.Side)),
                 proto.Price,
@@ -1001,6 +1189,11 @@ namespace CppTrader
         CppTrader::Matching::OrderTimeInForce RequestHandler::ConvertOrderTimeInForce(OrderTimeInForce tif)
         {
             return static_cast<CppTrader::Matching::OrderTimeInForce>(static_cast<uint8_t>(tif));
+        }
+
+        CppTrader::Matching::STPPolicy RequestHandler::ConvertSTPPolicy(Protocol::STPPolicy policy)
+        {
+            return static_cast<CppTrader::Matching::STPPolicy>(static_cast<uint8_t>(policy));
         }
 
         ErrorCode RequestHandler::ConvertMatchingError(CppTrader::Matching::ErrorCode error)

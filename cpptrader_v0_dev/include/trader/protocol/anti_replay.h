@@ -9,6 +9,7 @@
 #ifndef CPPTRADER_PROTOCOL_ANTI_REPLAY_H
 #define CPPTRADER_PROTOCOL_ANTI_REPLAY_H
 
+#include <array>
 #include <cstdint>
 #include <cstddef>
 #include <chrono>
@@ -23,7 +24,11 @@ namespace Protocol {
 class AntiReplayChecker
 {
 public:
-    AntiReplayChecker() = default;
+    static constexpr size_t SHARD_COUNT = 16;
+    static constexpr size_t MAX_NONCE_ENTRIES_PER_SHARD = 256;
+
+    explicit AntiReplayChecker(size_t max_entries_per_shard = MAX_NONCE_ENTRIES_PER_SHARD);
+
     ~AntiReplayChecker() = default;
 
     AntiReplayChecker(const AntiReplayChecker&) = delete;
@@ -38,14 +43,20 @@ public:
     void Cleanup();
 
 private:
-    static constexpr size_t MAX_NONCE_ENTRIES = 4096;
+    struct NonceShard
+    {
+        std::unordered_map<std::string, std::chrono::steady_clock::time_point> nonces;
+        mutable std::mutex mutex;
+    };
+
+    size_t max_entries_per_shard_;
+    std::array<NonceShard, SHARD_COUNT> shards_;
 
     static std::string NonceToKey(const uint8_t* nonce, size_t nonce_len);
 
-    void CleanupLocked();
+    size_t ShardIndex(const std::string& key) const;
 
-    std::unordered_map<std::string, std::chrono::steady_clock::time_point> recent_nonces_;
-    std::mutex mutex_;
+    void CleanupShard(NonceShard& shard);
 };
 
 } // namespace Protocol

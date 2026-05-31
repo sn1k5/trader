@@ -29,7 +29,8 @@ enum class ErrorCode : uint8_t
     ORDER_ID_INVALID,
     ORDER_TYPE_INVALID,
     ORDER_PARAMETER_INVALID,
-    ORDER_QUANTITY_INVALID
+    ORDER_QUANTITY_INVALID,
+    SELF_TRADE_PREVENTED
 };
 
 template <class TOutputStream>

@@ -13,8 +13,14 @@
 #include <condition_variable>
 #include <queue>
 #include <chrono>
+#include <vector>
 
 namespace CppTrader {
+
+namespace Matching {
+class MarketManager;
+}
+
 namespace WAL {
 
 //! WAL 操作类型枚举
@@ -29,11 +35,11 @@ enum class OperationType : uint8_t
 #pragma pack(push, 1)
 struct WALEntry
 {
-    uint64_t LSN;           // 日志序列号
-    uint64_t Timestamp;     // 微秒级时间戳
-    OperationType Operation; // 操作类型
-    uint8_t Reserved[3];    // 保留对齐
-    uint8_t Data[128];      // 操作数据
+    uint64_t LSN;
+    uint64_t Timestamp;
+    OperationType Operation;
+    uint32_t CRC32;
+    uint8_t Data[127];
 };
 #pragma pack(pop)
 static_assert(sizeof(WALEntry) == 148, "WALEntry must be exactly 148 bytes");
@@ -62,13 +68,26 @@ struct CancelOrderData
 #pragma pack(pop)
 static_assert(sizeof(CancelOrderData) == 16, "CancelOrderData must be exactly 16 bytes");
 
+enum class SyncStrategy : uint8_t
+{
+    ON_WRITE,
+    PERIODIC,
+    BATCH
+};
+
 //! WAL 配置
 struct WALConfig
 {
     std::string LogDirectory = "./wal";     // 日志文件目录
     uint64_t MaxFileSize = 1024 * 1024 * 1024; // 单文件最大 1GB
-    bool SyncOnWrite = true;                // 是否在写入后 fsync
-    size_t BufferSize = 64 * 1024;          // 写入缓冲区大小
+    bool SyncOnWrite = false;
+    SyncStrategy SyncMode = SyncStrategy::PERIODIC;
+    size_t SyncBatchSize = 10;
+    size_t BufferSize = 64 * 1024;
+
+    size_t MaxFileCount = 0;                // 最大保留文件数 (0=不限)
+    uint64_t MaxFileAgeSec = 0;             // 最大文件保留时间秒数 (0=不限)
+    size_t MinReserveCount = 2;             // 最少保留文件数 (安全预留)
 };
 
 //! WAL 写入器
@@ -100,8 +119,20 @@ public:
     //! 写入成交日志（更新订单状态后调用）
     uint64_t WriteTrade(const TradeData& trade);
 
-    //! 获取当前 LSN
     uint64_t CurrentLSN() const noexcept { return _currentLSN.load(); }
+    static uint32_t CalculateCRC32(const WALEntry& entry);
+
+    using WalRotateCallback = std::function<void()>;
+    void SetRotateCallback(WalRotateCallback callback);
+
+    struct CleanupResult
+    {
+        size_t files_deleted;
+        size_t files_kept;
+        size_t bytes_freed;
+    };
+
+    CleanupResult CleanupOldFiles(uint64_t safe_wal_sequence = 0);
 
 private:
     void WorkerThread();
@@ -125,6 +156,34 @@ private:
 
     std::vector<uint8_t> _buffer;
     size_t _bufferPos;
+    WalRotateCallback _rotate_callback;
+    bool _rotated;
+
+    void FlushBuffer();
+    uint64_t _flushCount;
+    size_t _entriesSinceSync;
+    static constexpr uint64_t FSYNC_INTERVAL = 10;
+    static constexpr auto FLUSH_TIMEOUT = std::chrono::microseconds(100);
+};
+
+struct WALReplayResult
+{
+    uint64_t entries_replayed;
+    uint64_t entries_skipped;
+    uint64_t last_lsn;
+};
+
+class WALReader
+{
+public:
+    explicit WALReader(const std::string& log_directory);
+
+    WALReplayResult Replay(CppTrader::Matching::MarketManager& market, uint64_t start_lsn = 0);
+
+private:
+    std::vector<std::string> FindWALFiles() const;
+
+    std::string _logDirectory;
 };
 
 } // namespace WAL

@@ -29,8 +29,17 @@ public class ReconcileService {
     public List<ReconcileDiffRecord> reconcile() {
         List<ReconcileDiffRecord> diffs = new ArrayList<>();
 
-        Set<String> keys = redisTemplate.keys(BALANCE_KEY_PREFIX + "*");
-        if (keys == null || keys.isEmpty()) {
+        Set<String> keys = new java.util.HashSet<>();
+        org.springframework.data.redis.core.Cursor<String> cursor = redisTemplate.scan(
+            org.springframework.data.redis.core.ScanOptions.scanOptions().match(BALANCE_KEY_PREFIX + "*").count(100).build());
+        try {
+            while (cursor.hasNext()) {
+                keys.add(cursor.next());
+            }
+        } finally {
+            try { cursor.close(); } catch (Exception e) { }
+        }
+        if (keys.isEmpty()) {
             log.info("No balance keys found in Redis");
             return diffs;
         }
@@ -71,20 +80,13 @@ public class ReconcileService {
 
     @Transactional
     public void autoFix(Long userId) {
-        BigDecimal redisAvailable = balanceRedisService.getAvailable(userId);
-        if (redisAvailable == null) {
-            log.error("Cannot auto-fix: Redis balance not found for userId={}", userId);
+        AccountBalance account = accountBalanceRepository.findByUserId(userId).orElse(null);
+        if (account == null) {
+            log.error("Cannot auto-fix: MySQL account not found for userId={}", userId);
             return;
         }
 
-        AccountBalance account = accountBalanceRepository.findByUserId(userId).orElse(null);
-        if (account == null) {
-            account = new AccountBalance();
-            account.setUserId(userId);
-            account.setFrozen(BigDecimal.ZERO);
-        }
-        account.setAvailable(redisAvailable);
-        accountBalanceRepository.save(account);
+        balanceRedisService.initBalance(userId, account.getAvailable(), account.getFrozen());
 
         List<ReconcileDiffRecord> unfixed = reconcileDiffRecordRepository.findByFixedFalse();
         unfixed.stream()
@@ -94,7 +96,7 @@ public class ReconcileService {
                     reconcileDiffRecordRepository.save(r);
                 });
 
-        log.info("Auto-fix completed: userId={}, set mysql available to {}", userId, redisAvailable);
+        log.info("Auto-fix completed: userId={}, set Redis available to {} from MySQL", userId, account.getAvailable());
     }
 
     public List<ReconcileDiffRecord> getUnfixedDiffs() {

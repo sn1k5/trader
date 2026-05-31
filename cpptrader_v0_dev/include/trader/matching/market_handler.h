@@ -64,6 +64,18 @@ protected:
 
     // Order execution handlers
     virtual void onExecuteOrder(const Order& order, uint64_t price, uint64_t quantity) {}
+
+    // Self-trade prevention handlers
+    //! Self-trade prevention handler
+    /*!
+        Called when self-trade prevention mechanism prevents a trade between
+        orders from the same account.
+
+        \param incoming - The incoming (new) order
+        \param resting - The resting order in the book
+        \param policy - The STP policy that was triggered
+    */
+    virtual void onSelfTradePrevented(const Order& incoming, const Order& resting, STPPolicy policy) {}
 };
 
 } // namespace Matching

@@ -282,10 +282,56 @@ CREATE TABLE `reconcile_diff_record` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='对账差异记录表，存储Redis和MySQL之间余额对账发现的差异记录';
 
 -- =============================================
+-- 9. 自成交防范相关表
+-- =============================================
+
+-- ---------------------------------------------
+-- 自成交防范配置表 (stp_config)
+-- 用途：存储自成交防范策略的配置，支持按交易品种配置不同策略
+-- ---------------------------------------------
+CREATE TABLE `stp_config` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID，自增长',
+    `symbol_id` INT DEFAULT NULL COMMENT '交易品种ID，NULL表示全局默认配置，非NULL表示品种级配置',
+    `policy` VARCHAR(32) NOT NULL DEFAULT 'REJECT_NEW' COMMENT 'STP策略：REJECT_NEW-拒绝新订单, CANCEL_OLDEST-取消旧订单, CANCEL_NEWEST-取消新订单, CANCEL_BOTH-取消双方, DECREMENT-减量',
+    `enabled` INT NOT NULL DEFAULT 1 COMMENT '是否启用：0-禁用, 1-启用',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '记录更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_symbol_id` (`symbol_id`) COMMENT '交易品种ID唯一索引，确保每个品种只有一条配置'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自成交防范配置表，存储自成交防范策略配置';
+
+-- ---------------------------------------------
+-- 自成交防范告警表 (stp_alert)
+-- 用途：记录自成交防范事件的详细信息，用于审计和监控
+-- ---------------------------------------------
+CREATE TABLE `stp_alert` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID，自增长',
+    `user_id` BIGINT NOT NULL COMMENT '用户ID，触发自成交防范的用户',
+    `symbol_id` INT NOT NULL COMMENT '交易品种ID，发生自成交防范的品种',
+    `incoming_order_id` BIGINT NOT NULL COMMENT '新订单ID，触发STP的 incoming 订单',
+    `incoming_side` INT NOT NULL COMMENT '新订单方向：0-买入(BUY), 1-卖出(SELL)',
+    `incoming_price` BIGINT NOT NULL COMMENT '新订单价格',
+    `incoming_quantity` BIGINT NOT NULL COMMENT '新订单数量',
+    `resting_order_id` BIGINT NOT NULL COMMENT '对手订单ID，已挂在订单簿上的订单',
+    `resting_side` INT NOT NULL COMMENT '对手订单方向：0-买入(BUY), 1-卖出(SELL)',
+    `resting_price` BIGINT NOT NULL COMMENT '对手订单价格',
+    `resting_quantity` BIGINT NOT NULL COMMENT '对手订单剩余数量',
+    `overlap_quantity` BIGINT NOT NULL COMMENT '重叠数量，可能自成交的数量',
+    `policy_applied` VARCHAR(32) NOT NULL COMMENT '应用的STP策略',
+    `action_taken` VARCHAR(32) NOT NULL COMMENT '执行的动作：INCOMING_REJECTED, RESTING_CANCELLED, INCOMING_CANCELLED, BOTH_CANCELLED, QUANTITY_DECREMENTED',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_user_id` (`user_id`) COMMENT '用户ID索引',
+    KEY `idx_symbol_id` (`symbol_id`) COMMENT '交易品种ID索引',
+    KEY `idx_incoming_order_id` (`incoming_order_id`) COMMENT '新订单ID索引',
+    KEY `idx_created_at` (`created_at`) COMMENT '创建时间索引'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自成交防范告警表，记录自成交防范事件';
+
+-- =============================================
 -- 完成提示
 -- =============================================
 -- 所有表结构创建完成！
--- 总计14张表：
+-- 总计16张表：
 -- 1. sys_user - 系统用户表
 -- 2. trading_account - 交易账户表
 -- 3. account_balance - 账户余额表
@@ -300,4 +346,6 @@ CREATE TABLE `reconcile_diff_record` (
 -- 12. saga_step_log - Saga步骤日志表
 -- 13. idempotent_record - 幂等记录表
 -- 14. reconcile_diff_record - 对账差异记录表
+-- 15. stp_config - 自成交防范配置表
+-- 16. stp_alert - 自成交防范告警表
 -- =============================================

@@ -21,3 +21,5 @@ target/
 *.nar
 wal/
 sample.itch
+snapshots/
+spec/

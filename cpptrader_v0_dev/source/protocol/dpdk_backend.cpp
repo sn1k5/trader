@@ -298,6 +298,11 @@ void DpdkBackend::SendTcpPacket(uint32_t remote_ip, uint16_t remote_port, uint16
 #endif
 }
 
+void DpdkBackend::close(uint16_t conn_id)
+{
+    CloseConnection(conn_id);
+}
+
 void DpdkBackend::CloseConnection(uint16_t conn_id)
 {
     auto it = _connections.find(conn_id);

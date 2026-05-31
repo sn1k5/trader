@@ -1,11 +1,3 @@
-/*!
-    \file anti_replay.cpp
-    \brief Anti-replay attack checker implementation
-    \author CppTrader Team
-    \date 28.05.2026
-    \copyright MIT License
-*/
-
 #include "trader/protocol/anti_replay.h"
 
 #include <cstring>
@@ -16,6 +8,11 @@
 namespace CppTrader {
 namespace Protocol {
 
+AntiReplayChecker::AntiReplayChecker(size_t max_entries_per_shard)
+    : max_entries_per_shard_(max_entries_per_shard)
+{
+}
+
 std::string AntiReplayChecker::NonceToKey(const uint8_t* nonce, size_t nonce_len)
 {
     std::ostringstream oss;
@@ -25,27 +22,41 @@ std::string AntiReplayChecker::NonceToKey(const uint8_t* nonce, size_t nonce_len
     return oss.str();
 }
 
+size_t AntiReplayChecker::ShardIndex(const std::string& key) const
+{
+    size_t h = 0xcbf29ce484222325ULL;
+    for (char c : key)
+    {
+        h ^= static_cast<size_t>(c);
+        h *= 0x100000001b3ULL;
+    }
+    return h & (SHARD_COUNT - 1);
+}
+
 bool AntiReplayChecker::CheckNonce(const uint8_t* nonce, size_t nonce_len, uint64_t timestamp_ms)
 {
     std::string key = NonceToKey(nonce, nonce_len);
     auto expiry = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    size_t idx = ShardIndex(key);
+    NonceShard& shard = shards_[idx];
 
-    auto it = recent_nonces_.find(key);
-    if (it != recent_nonces_.end())
+    std::lock_guard<std::mutex> lock(shard.mutex);
+
+    auto it = shard.nonces.find(key);
+    if (it != shard.nonces.end())
     {
         return false;
     }
 
-    if (recent_nonces_.size() >= MAX_NONCE_ENTRIES)
+    if (shard.nonces.size() >= max_entries_per_shard_)
     {
-        CleanupLocked();
-        if (recent_nonces_.size() >= MAX_NONCE_ENTRIES)
+        CleanupShard(shard);
+        if (shard.nonces.size() >= max_entries_per_shard_)
             return false;
     }
 
-    recent_nonces_[std::move(key)] = expiry;
+    shard.nonces[std::move(key)] = expiry;
     return true;
 }
 
@@ -63,19 +74,22 @@ bool AntiReplayChecker::CheckTimestamp(uint64_t timestamp_ms, int64_t tolerance_
 
 void AntiReplayChecker::Cleanup()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    CleanupLocked();
+    for (size_t i = 0; i < SHARD_COUNT; ++i)
+    {
+        std::lock_guard<std::mutex> lock(shards_[i].mutex);
+        CleanupShard(shards_[i]);
+    }
 }
 
-void AntiReplayChecker::CleanupLocked()
+void AntiReplayChecker::CleanupShard(NonceShard& shard)
 {
     auto now = std::chrono::steady_clock::now();
 
-    for (auto it = recent_nonces_.begin(); it != recent_nonces_.end(); )
+    for (auto it = shard.nonces.begin(); it != shard.nonces.end(); )
     {
         if (it->second <= now)
         {
-            it = recent_nonces_.erase(it);
+            it = shard.nonces.erase(it);
         }
         else
         {

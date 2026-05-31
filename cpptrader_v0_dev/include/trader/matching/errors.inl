@@ -47,6 +47,9 @@ inline TOutputStream& operator<<(TOutputStream& stream, ErrorCode error)
         case ErrorCode::ORDER_QUANTITY_INVALID:
             stream << "ORDER_QUANTITY_INVALID";
             break;
+        case ErrorCode::SELF_TRADE_PREVENTED:
+            stream << "SELF_TRADE_PREVENTED";
+            break;
         default:
             stream << "<unknown>";
             break;

@@ -65,13 +65,14 @@ protected:
 
     bool onMessage(const AddOrderMessage& message) override
     {
-        _market.AddOrder(Order::Limit(message.OrderReferenceNumber, message.StockLocate, (message.BuySellIndicator == 'B') ? OrderSide::BUY : OrderSide::SELL, message.Price, message.Shares));
+        _market.AddOrder(Order::Limit(message.OrderReferenceNumber, message.StockLocate, 0, STPPolicy::CANCEL_NEW, (message.BuySellIndicator == 'B') ? OrderSide::BUY : OrderSide::SELL, message.Price, message.Shares));
         return true;
     }
 
     bool onMessage(const AddOrderMPIDMessage& message) override
     {
-        _market.AddOrder(Order::Limit(message.OrderReferenceNumber, message.StockLocate, (message.BuySellIndicator == 'B') ? OrderSide::BUY : OrderSide::SELL, message.Price, message.Shares));
+        ++_messages;
+        _market.AddOrder(Order::Limit(message.OrderReferenceNumber, message.StockLocate, 0, STPPolicy::CANCEL_NEW, (message.BuySellIndicator == 'B') ? OrderSide::BUY : OrderSide::SELL, message.Price, message.Shares));
         return true;
     }
 

@@ -117,6 +117,17 @@ enum class OrderTimeInForce : uint8_t
 template <class TOutputStream>
 TOutputStream& operator<<(TOutputStream& stream, OrderTimeInForce tif);
 
+enum class STPPolicy : uint8_t
+{
+    CANCEL_NEW = 1,
+    CANCEL_OLD = 2,
+    CANCEL_BOTH = 3,
+    DECREMENT = 4
+};
+
+template <class TOutputStream>
+TOutputStream& operator<<(TOutputStream& stream, STPPolicy policy);
+
 //! Order
 /*!
     An order is an instruction to buy or sell on a trading venue such as a stock market,
@@ -130,6 +141,8 @@ struct Order
     uint64_t Id;
     //! Symbol Id
     uint32_t SymbolId;
+    uint64_t AccountId;
+    CppTrader::Matching::STPPolicy StpPolicy;
     //! Order type
     OrderType Type;
     //! Order side
@@ -198,8 +211,7 @@ struct Order
     int64_t TrailingStep;
 
     Order() noexcept = default;
-    Order(uint64_t id, uint32_t symbol, OrderType type, OrderSide side, uint64_t price, uint64_t stop_price, uint64_t quantity,
-        OrderTimeInForce tif = OrderTimeInForce::GTC,
+    Order(uint64_t id, uint32_t symbol, uint64_t account_id, STPPolicy stp_policy, OrderType type, OrderSide side, uint64_t price, uint64_t stop_price, uint64_t quantity, OrderTimeInForce tif,
         uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max(),
         uint64_t slippage = std::numeric_limits<uint64_t>::max(),
         int64_t trailing_distance = 0,
@@ -249,50 +261,59 @@ struct Order
     //! Is the order have slippage?
     bool IsSlippage() const noexcept { return Slippage < std::numeric_limits<uint64_t>::max(); }
 
+    //! Is the STP policy 'Cancel New'?
+    bool IsStpCancelNew() const noexcept { return StpPolicy == STPPolicy::CANCEL_NEW; }
+    //! Is the STP policy 'Cancel Old'?
+    bool IsStpCancelOld() const noexcept { return StpPolicy == STPPolicy::CANCEL_OLD; }
+    //! Is the STP policy 'Cancel Both'?
+    bool IsStpCancelBoth() const noexcept { return StpPolicy == STPPolicy::CANCEL_BOTH; }
+    //! Is the STP policy 'Decrement'?
+    bool IsStpDecrement() const noexcept { return StpPolicy == STPPolicy::DECREMENT; }
+
     //! Validate order parameters
     ErrorCode Validate() const noexcept;
 
     //! Prepare a new market order
-    static Order Market(uint64_t id, uint32_t symbol, OrderSide side, uint64_t quantity, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order Market(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, OrderSide side = OrderSide::BUY, uint64_t quantity = 0, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new buy market order
-    static Order BuyMarket(uint64_t id, uint32_t symbol, uint64_t quantity, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order BuyMarket(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t quantity = 0, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new sell market order
-    static Order SellMarket(uint64_t id, uint32_t symbol, uint64_t quantity, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order SellMarket(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t quantity = 0, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
 
     //! Prepare a new limit order
-    static Order Limit(uint64_t id, uint32_t symbol, OrderSide side, uint64_t price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order Limit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, OrderSide side = OrderSide::BUY, uint64_t price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new buy limit order
-    static Order BuyLimit(uint64_t id, uint32_t symbol, uint64_t price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order BuyLimit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new sell limit order
-    static Order SellLimit(uint64_t id, uint32_t symbol, uint64_t price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order SellLimit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
 
     //! Prepare a new stop order
-    static Order Stop(uint64_t id, uint32_t symbol, OrderSide side, uint64_t stop_price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order Stop(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, OrderSide side = OrderSide::BUY, uint64_t stop_price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new buy stop order
-    static Order BuyStop(uint64_t id, uint32_t symbol, uint64_t stop_price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order BuyStop(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t stop_price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new sell stop order
-    static Order SellStop(uint64_t id, uint32_t symbol, uint64_t stop_price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order SellStop(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t stop_price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
 
     //! Prepare a new stop-limit order
-    static Order StopLimit(uint64_t id, uint32_t symbol, OrderSide side, uint64_t stop_price, uint64_t price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order StopLimit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, OrderSide side = OrderSide::BUY, uint64_t stop_price = 0, uint64_t price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new buy stop-limit order
-    static Order BuyStopLimit(uint64_t id, uint32_t symbol, uint64_t stop_price, uint64_t price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order BuyStopLimit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t stop_price = 0, uint64_t price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new sell stop-limit order
-    static Order SellStopLimit(uint64_t id, uint32_t symbol, uint64_t stop_price, uint64_t price, uint64_t quantity, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order SellStopLimit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t stop_price = 0, uint64_t price = 0, uint64_t quantity = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
 
     //! Prepare a new trailing stop order
-    static Order TrailingStop(uint64_t id, uint32_t symbol, OrderSide side, uint64_t stop_price, uint64_t quantity, int64_t trailing_distance, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order TrailingStop(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, OrderSide side = OrderSide::BUY, uint64_t stop_price = 0, uint64_t quantity = 0, int64_t trailing_distance = 0, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new trailing buy stop order
-    static Order TrailingBuyStop(uint64_t id, uint32_t symbol, uint64_t stop_price, uint64_t quantity, int64_t trailing_distance, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order TrailingBuyStop(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t stop_price = 0, uint64_t quantity = 0, int64_t trailing_distance = 0, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new trailing sell stop order
-    static Order TrailingSellStop(uint64_t id, uint32_t symbol, uint64_t stop_price, uint64_t quantity, int64_t trailing_distance, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order TrailingSellStop(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t stop_price = 0, uint64_t quantity = 0, int64_t trailing_distance = 0, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t slippage = std::numeric_limits<uint64_t>::max()) noexcept;
 
     //! Prepare a new trailing stop-limit order
-    static Order TrailingStopLimit(uint64_t id, uint32_t symbol, OrderSide side, uint64_t stop_price, uint64_t price, uint64_t quantity, int64_t trailing_distance, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order TrailingStopLimit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, OrderSide side = OrderSide::BUY, uint64_t stop_price = 0, uint64_t price = 0, uint64_t quantity = 0, int64_t trailing_distance = 0, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new trailing buy stop-limit order
-    static Order TrailingBuyStopLimit(uint64_t id, uint32_t symbol, uint64_t stop_price, uint64_t price, uint64_t quantity, int64_t trailing_distance, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order TrailingBuyStopLimit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t stop_price = 0, uint64_t price = 0, uint64_t quantity = 0, int64_t trailing_distance = 0, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
     //! Prepare a new trailing sell stop-limit order
-    static Order TrailingSellStopLimit(uint64_t id, uint32_t symbol, uint64_t stop_price, uint64_t price, uint64_t quantity, int64_t trailing_distance, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
+    static Order TrailingSellStopLimit(uint64_t id, uint32_t symbol, uint64_t account_id = 0, STPPolicy stp_policy = STPPolicy::CANCEL_NEW, uint64_t stop_price = 0, uint64_t price = 0, uint64_t quantity = 0, int64_t trailing_distance = 0, int64_t trailing_step = 0, OrderTimeInForce tif = OrderTimeInForce::GTC, uint64_t max_visible_quantity = std::numeric_limits<uint64_t>::max()) noexcept;
 };
 
 struct LevelNode;

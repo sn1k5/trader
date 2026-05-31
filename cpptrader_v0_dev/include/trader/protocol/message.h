@@ -68,6 +68,15 @@ enum class OrderTimeInForce : uint8_t
     AON = 3
 };
 
+//! STP policy
+enum class STPPolicy : uint8_t
+{
+    CANCEL_NEW = 1,
+    CANCEL_OLD = 2,
+    CANCEL_BOTH = 3,
+    DECREMENT = 4
+};
+
 //! Error code
 enum class ErrorCode : uint8_t
 {
@@ -89,7 +98,8 @@ enum class ErrorCode : uint8_t
     REPLAY_DETECTED = 24,
     RATE_LIMITED = 25,
     CONNECTION_REJECTED = 26,
-    SERVER_SHUTTING_DOWN = 27
+    SERVER_SHUTTING_DOWN = 27,
+    SELF_TRADE_PREVENTED = 28
 };
 
 //! Update type
@@ -107,6 +117,7 @@ struct OrderProto
 {
     uint64_t Id;
     uint32_t SymbolId;
+    uint64_t AccountId;
     uint8_t Type;
     uint8_t Side;
     uint64_t Price;
@@ -116,13 +127,14 @@ struct OrderProto
     uint64_t LeavesQuantity;
     uint8_t TimeInForce;
     uint8_t Padding1;
+    uint8_t StpPolicy;
     uint64_t MaxVisibleQuantity;
     uint64_t Slippage;
     int64_t TrailingDistance;
     int64_t TrailingStep;
 };
 #pragma pack(pop)
-static_assert(sizeof(OrderProto) == 88, "OrderProto must be exactly 88 bytes");
+static_assert(sizeof(OrderProto) == 97, "OrderProto must be exactly 97 bytes");
 
 //! Add symbol request
 #pragma pack(push, 1)
@@ -150,7 +162,7 @@ struct AddOrderRequest
     OrderProto Order;
 };
 #pragma pack(pop)
-static_assert(sizeof(AddOrderRequest) == 88, "AddOrderRequest must be exactly 88 bytes");
+static_assert(sizeof(AddOrderRequest) == 97, "AddOrderRequest must be exactly 97 bytes");
 
 //! Order response
 #pragma pack(push, 1)
@@ -160,7 +172,7 @@ struct OrderResponse
     OrderProto Order;
 };
 #pragma pack(pop)
-static_assert(sizeof(OrderResponse) == 89, "OrderResponse must be exactly 89 bytes");
+static_assert(sizeof(OrderResponse) == 98, "OrderResponse must be exactly 98 bytes");
 
 //! Order book snapshot (variable length)
 #pragma pack(push, 1)
@@ -224,7 +236,7 @@ struct OrderUpdateEvent
     uint64_t ExecuteQuantity;
 };
 #pragma pack(pop)
-static_assert(sizeof(OrderUpdateEvent) == 105, "OrderUpdateEvent must be exactly 105 bytes");
+static_assert(sizeof(OrderUpdateEvent) == 114, "OrderUpdateEvent must be exactly 114 bytes");
 
 //! Simple response (1 byte)
 #pragma pack(push, 1)
@@ -369,7 +381,7 @@ struct SubscribeRequest
 #pragma pack(pop)
 static_assert(sizeof(SubscribeRequest) == 4, "SubscribeRequest must be exactly 4 bytes");
 
-//! Auth request (88 bytes: apiKeyId(32) + timestamp(8) + nonce(16) + signature(32))
+//! Auth request (120 bytes: apiKeyId(32) + timestamp(8) + nonce(16) + signature(32) + recoveryToken(32))
 #pragma pack(push, 1)
 struct AuthRequest
 {
@@ -377,19 +389,22 @@ struct AuthRequest
     int64_t Timestamp;
     char Nonce[16];
     char Signature[32];
+    char RecoveryToken[32];
 };
 #pragma pack(pop)
-static_assert(sizeof(AuthRequest) == 88, "AuthRequest must be exactly 88 bytes");
+static_assert(sizeof(AuthRequest) == 120, "AuthRequest must be exactly 120 bytes");
 
-//! Auth response (17 bytes: error(1) + sessionToken(16))
+//! Auth response (42 bytes: error(1) + sessionToken(32) + accountId(8) + role(1))
 #pragma pack(push, 1)
 struct AuthResponse
 {
     uint8_t Error;
     char SessionToken[32];
+    uint64_t AccountId;
+    uint8_t Role;
 };
 #pragma pack(pop)
-static_assert(sizeof(AuthResponse) == 33, "AuthResponse must be exactly 33 bytes");
+static_assert(sizeof(AuthResponse) == 42, "AuthResponse must be exactly 42 bytes");
 
 //! Event acknowledgment
 #pragma pack(push, 1)
@@ -440,6 +455,18 @@ struct OrderBookSummary
 };
 #pragma pack(pop)
 static_assert(sizeof(OrderBookSummary) == 48, "OrderBookSummary must be exactly 48 bytes");
+
+#pragma pack(push, 1)
+struct SnapshotResponse
+{
+    uint8_t Error;
+    uint64_t TimestampNs;
+    uint64_t WalSequence;
+    uint32_t SymbolCount;
+    uint32_t OrderCount;
+};
+#pragma pack(pop)
+static_assert(sizeof(SnapshotResponse) == 25, "SnapshotResponse must be exactly 25 bytes");
 
     } // namespace Protocol
 } // namespace CppTrader

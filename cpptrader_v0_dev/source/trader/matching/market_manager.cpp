@@ -1105,6 +1105,55 @@ void MarketManager::Match(OrderBook* order_book_ptr)
                 // Special case for 'All-Or-None' orders
                 if (bid_order_ptr->IsAON() || ask_order_ptr->IsAON())
                 {
+                    if (bid_order_ptr->AccountId != 0 && bid_order_ptr->AccountId == ask_order_ptr->AccountId)
+                    {
+                        OrderNode* new_order = (bid_order_ptr->Id > ask_order_ptr->Id) ? bid_order_ptr : ask_order_ptr;
+                        OrderNode* old_order = (bid_order_ptr->Id > ask_order_ptr->Id) ? ask_order_ptr : bid_order_ptr;
+                        STPPolicy stp_policy = bid_order_ptr->StpPolicy;
+
+                        switch (stp_policy)
+                        {
+                            case STPPolicy::CANCEL_NEW:
+                                _market_handler.onSelfTradePrevented(*bid_order_ptr, *ask_order_ptr, STPPolicy::CANCEL_NEW);
+                                DeleteOrder(new_order->Id, true);
+                                break;
+
+                            case STPPolicy::CANCEL_OLD:
+                                _market_handler.onSelfTradePrevented(*bid_order_ptr, *ask_order_ptr, STPPolicy::CANCEL_OLD);
+                                DeleteOrder(old_order->Id, true);
+                                break;
+
+                            case STPPolicy::CANCEL_BOTH:
+                                _market_handler.onSelfTradePrevented(*bid_order_ptr, *ask_order_ptr, STPPolicy::CANCEL_BOTH);
+                                DeleteOrder(bid_order_ptr->Id, true);
+                                DeleteOrder(ask_order_ptr->Id, true);
+                                break;
+
+                            case STPPolicy::DECREMENT:
+                            {
+                                _market_handler.onSelfTradePrevented(*bid_order_ptr, *ask_order_ptr, STPPolicy::DECREMENT);
+                                uint64_t stp_qty = std::min(bid_order_ptr->LeavesQuantity, ask_order_ptr->LeavesQuantity);
+                                if (bid_order_ptr->LeavesQuantity <= ask_order_ptr->LeavesQuantity)
+                                {
+                                    DeleteOrder(bid_order_ptr->Id, true);
+                                    ReduceOrder(ask_order_ptr->Id, stp_qty, true);
+                                }
+                                else
+                                {
+                                    DeleteOrder(ask_order_ptr->Id, true);
+                                    ReduceOrder(bid_order_ptr->Id, stp_qty, true);
+                                }
+                                break;
+                            }
+
+                            default:
+                                break;
+                        }
+                        bid_order_ptr = next_bid_order_ptr;
+                        ask_order_ptr = next_ask_order_ptr;
+                        continue;
+                    }
+
                     // Calculate the matching chain
                     uint64_t chain = CalculateMatchingChain(order_book_ptr, bid_level_ptr, ask_level_ptr);
 
@@ -1134,6 +1183,55 @@ void MarketManager::Match(OrderBook* order_book_ptr)
                 OrderNode* reducing_order_ptr = ask_order_ptr;
                 if (executing_order_ptr->LeavesQuantity > reducing_order_ptr->LeavesQuantity)
                     std::swap(executing_order_ptr, reducing_order_ptr);
+
+                // Self-trade prevention (STP) check for cross matching
+                if (bid_order_ptr->AccountId != 0 && bid_order_ptr->AccountId == ask_order_ptr->AccountId)
+                {
+                    OrderNode* new_order = (bid_order_ptr->Id > ask_order_ptr->Id) ? bid_order_ptr : ask_order_ptr;
+                    OrderNode* old_order = (bid_order_ptr->Id > ask_order_ptr->Id) ? ask_order_ptr : bid_order_ptr;
+                    STPPolicy stp_policy = bid_order_ptr->StpPolicy;
+                    switch (stp_policy)
+                    {
+                        case STPPolicy::CANCEL_NEW:
+                            _market_handler.onSelfTradePrevented(*bid_order_ptr, *ask_order_ptr, STPPolicy::CANCEL_NEW);
+                            DeleteOrder(new_order->Id, true);
+                            break;
+
+                        case STPPolicy::CANCEL_OLD:
+                            _market_handler.onSelfTradePrevented(*bid_order_ptr, *ask_order_ptr, STPPolicy::CANCEL_OLD);
+                            DeleteOrder(old_order->Id, true);
+                            break;
+
+                        case STPPolicy::CANCEL_BOTH:
+                            _market_handler.onSelfTradePrevented(*bid_order_ptr, *ask_order_ptr, STPPolicy::CANCEL_BOTH);
+                            DeleteOrder(bid_order_ptr->Id, true);
+                            DeleteOrder(ask_order_ptr->Id, true);
+                            break;
+
+                        case STPPolicy::DECREMENT:
+                        {
+                            _market_handler.onSelfTradePrevented(*bid_order_ptr, *ask_order_ptr, STPPolicy::DECREMENT);
+                            uint64_t stp_qty = std::min(bid_order_ptr->LeavesQuantity, ask_order_ptr->LeavesQuantity);
+                            if (bid_order_ptr->LeavesQuantity <= ask_order_ptr->LeavesQuantity)
+                            {
+                                DeleteOrder(bid_order_ptr->Id, true);
+                                ReduceOrder(ask_order_ptr->Id, stp_qty, true);
+                            }
+                            else
+                            {
+                                DeleteOrder(ask_order_ptr->Id, true);
+                                ReduceOrder(bid_order_ptr->Id, stp_qty, true);
+                            }
+                            break;
+                        }
+
+                        default:
+                            break;
+                    }
+                    bid_order_ptr = next_bid_order_ptr;
+                    ask_order_ptr = next_ask_order_ptr;
+                    continue;
+                }
 
                 // Get the execution quantity
                 uint64_t quantity = executing_order_ptr->LeavesQuantity;
@@ -1235,6 +1333,113 @@ void MarketManager::MatchOrder(OrderBook* order_book_ptr, Order* order_ptr)
         // Special case for 'Fill-Or-Kill'/'All-Or-None' order
         if (order_ptr->IsFOK() || order_ptr->IsAON())
         {
+            if (order_ptr->AccountId != 0)
+            {
+                OrderNode* scan_ptr = level_ptr->OrderList.front();
+                LevelNode* scan_level_ptr = level_ptr;
+                bool self_trade_found = false;
+
+                while (scan_level_ptr != nullptr && !self_trade_found)
+                {
+                    bool scan_arbitrage = order_ptr->IsBuy() ? (order_ptr->Price >= scan_level_ptr->Price) : (order_ptr->Price <= scan_level_ptr->Price);
+                    if (!scan_arbitrage)
+                        break;
+
+                    while (scan_ptr != nullptr)
+                    {
+                        if (scan_ptr->AccountId == order_ptr->AccountId)
+                        {
+                            self_trade_found = true;
+                            break;
+                        }
+                        scan_ptr = scan_ptr->next;
+                    }
+
+                    if (!self_trade_found)
+                    {
+                        scan_level_ptr = order_book_ptr->GetNextLevel(scan_level_ptr);
+                        if (scan_level_ptr != nullptr)
+                            scan_ptr = scan_level_ptr->OrderList.front();
+                    }
+                }
+
+                if (self_trade_found)
+                {
+                    switch (order_ptr->StpPolicy)
+                    {
+                        case STPPolicy::CANCEL_NEW:
+                            _market_handler.onSelfTradePrevented(*order_ptr, *scan_ptr, STPPolicy::CANCEL_NEW);
+                            order_ptr->LeavesQuantity = 0;
+                            return;
+
+                        case STPPolicy::CANCEL_BOTH:
+                            _market_handler.onSelfTradePrevented(*order_ptr, *scan_ptr, STPPolicy::CANCEL_BOTH);
+                            order_ptr->LeavesQuantity = 0;
+                            return;
+
+                        case STPPolicy::CANCEL_OLD:
+                        {
+                            _market_handler.onSelfTradePrevented(*order_ptr, *scan_ptr, STPPolicy::CANCEL_OLD);
+                            DeleteOrder(scan_ptr->Id, true);
+                            uint64_t chain = CalculateMatchingChain(order_book_ptr, level_ptr, order_ptr->Price, order_ptr->LeavesQuantity);
+                            if (chain == 0)
+                            {
+                                if (order_ptr->IsFOK())
+                                {
+                                    order_ptr->LeavesQuantity = 0;
+                                    return;
+                                }
+                                return;
+                            }
+                            ExecuteMatchingChain(order_book_ptr, level_ptr, order_ptr->Price, chain);
+                            _market_handler.onExecuteOrder(*order_ptr, order_ptr->Price, order_ptr->LeavesQuantity);
+                            order_book_ptr->UpdateLastPrice(*order_ptr, order_ptr->Price);
+                            order_book_ptr->UpdateMatchingPrice(*order_ptr, order_ptr->Price);
+                            order_ptr->ExecutedQuantity += order_ptr->LeavesQuantity;
+                            order_ptr->LeavesQuantity = 0;
+                            return;
+                        }
+
+                        case STPPolicy::DECREMENT:
+                        {
+                            _market_handler.onSelfTradePrevented(*order_ptr, *scan_ptr, STPPolicy::DECREMENT);
+                            uint64_t stp_qty = std::min(order_ptr->LeavesQuantity, scan_ptr->LeavesQuantity);
+                            if (order_ptr->LeavesQuantity <= scan_ptr->LeavesQuantity)
+                            {
+                                DeleteOrder(scan_ptr->Id, true);
+                                order_ptr->LeavesQuantity = 0;
+                                return;
+                            }
+                            else
+                            {
+                                DeleteOrder(scan_ptr->Id, true);
+                                order_ptr->LeavesQuantity -= stp_qty;
+                                uint64_t chain = CalculateMatchingChain(order_book_ptr, level_ptr, order_ptr->Price, order_ptr->LeavesQuantity);
+                                if (chain == 0)
+                                {
+                                    if (order_ptr->IsFOK())
+                                    {
+                                        order_ptr->LeavesQuantity = 0;
+                                        return;
+                                    }
+                                    return;
+                                }
+                                ExecuteMatchingChain(order_book_ptr, level_ptr, order_ptr->Price, chain);
+                                _market_handler.onExecuteOrder(*order_ptr, order_ptr->Price, order_ptr->LeavesQuantity);
+                                order_book_ptr->UpdateLastPrice(*order_ptr, order_ptr->Price);
+                                order_book_ptr->UpdateMatchingPrice(*order_ptr, order_ptr->Price);
+                                order_ptr->ExecutedQuantity += order_ptr->LeavesQuantity;
+                                order_ptr->LeavesQuantity = 0;
+                                return;
+                            }
+                        }
+
+                        default:
+                            break;
+                    }
+                }
+            }
+
             // Calculate the matching chain
             uint64_t chain = CalculateMatchingChain(order_book_ptr, level_ptr, order_ptr->Price, order_ptr->LeavesQuantity);
 
@@ -1269,6 +1474,52 @@ void MarketManager::MatchOrder(OrderBook* order_book_ptr, Order* order_ptr)
         {
             // Find the next order to execute
             OrderNode* next_executing_order_ptr = executing_order_ptr->next;
+
+            // Self-trade prevention (STP) check
+            if (order_ptr->AccountId != 0 && order_ptr->AccountId == executing_order_ptr->AccountId)
+            {
+                switch (order_ptr->StpPolicy)
+                {
+                    case STPPolicy::CANCEL_NEW:
+                        _market_handler.onSelfTradePrevented(*order_ptr, *executing_order_ptr, STPPolicy::CANCEL_NEW);
+                        order_ptr->LeavesQuantity = 0;
+                        return;
+
+                    case STPPolicy::CANCEL_OLD:
+                        _market_handler.onSelfTradePrevented(*order_ptr, *executing_order_ptr, STPPolicy::CANCEL_OLD);
+                        DeleteOrder(executing_order_ptr->Id, true);
+                        executing_order_ptr = next_executing_order_ptr;
+                        continue;
+
+                    case STPPolicy::CANCEL_BOTH:
+                        _market_handler.onSelfTradePrevented(*order_ptr, *executing_order_ptr, STPPolicy::CANCEL_BOTH);
+                        DeleteOrder(executing_order_ptr->Id, true);
+                        order_ptr->LeavesQuantity = 0;
+                        return;
+
+                    case STPPolicy::DECREMENT:
+                    {
+                        _market_handler.onSelfTradePrevented(*order_ptr, *executing_order_ptr, STPPolicy::DECREMENT);
+                        uint64_t stp_quantity = std::min(order_ptr->LeavesQuantity, executing_order_ptr->LeavesQuantity);
+                        if (order_ptr->LeavesQuantity <= executing_order_ptr->LeavesQuantity)
+                        {
+                            DeleteOrder(executing_order_ptr->Id, true);
+                            order_ptr->LeavesQuantity = 0;
+                            return;
+                        }
+                        else
+                        {
+                            DeleteOrder(executing_order_ptr->Id, true);
+                            order_ptr->LeavesQuantity -= stp_quantity;
+                            executing_order_ptr = next_executing_order_ptr;
+                            continue;
+                        }
+                    }
+
+                    default:
+                        break;
+                }
+            }
 
             // Get the execution quantity
             uint64_t quantity = std::min(executing_order_ptr->LeavesQuantity, order_ptr->LeavesQuantity);

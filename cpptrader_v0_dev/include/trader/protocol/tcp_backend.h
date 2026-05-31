@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -40,6 +41,9 @@ struct TcpConnection
     FrameDecoder Decoder;
     //! Decode failure counter
     uint32_t DecodeFailCount;
+    std::deque<std::vector<uint8_t>> WriteQueue;
+    bool Writing = false;
+    bool Closed = false;
 
     TcpConnection(uint16_t id, asio::io_context& io_context)
         : Id(id)
@@ -63,16 +67,6 @@ struct TcpConnection
 class TcpBackend : public INetworkBackend
 {
 public:
-    //! Message handler callback type
-    using MessageHandler = std::function<void(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len)>;
-    //! Connection handler callback type
-    using ConnectionHandler = std::function<void(uint16_t conn_id)>;
-
-    //! Constructor
-    /*!
-        \param io_context - Asio io_context reference
-        \param port - TCP listen port
-    */
     TcpBackend(asio::io_context& io_context, uint16_t port);
     ~TcpBackend() override;
 
@@ -93,14 +87,10 @@ public:
     //! Broadcast data to all connected clients
     void broadcast(const void* data, size_t len) override;
 
-    //! Set message handler callback
-    void SetMessageHandler(const MessageHandler& handler) { _message_handler = handler; }
-
-    //! Set connection established handler
-    void SetConnectHandler(const ConnectionHandler& handler) { _connect_handler = handler; }
-
-    //! Set connection closed handler
-    void SetDisconnectHandler(const ConnectionHandler& handler) { _disconnect_handler = handler; }
+    void SetMessageHandler(const MessageHandler& handler) override { _message_handler = handler; }
+    void SetConnectHandler(const ConnectHandler& handler) override { _connect_handler = handler; }
+    void SetDisconnectHandler(const DisconnectHandler& handler) override { _disconnect_handler = handler; }
+    void close(uint16_t conn_id) override;
 
     //! Get number of active connections
     size_t ConnectionCount() const noexcept { return _connections.size(); }
@@ -113,14 +103,17 @@ private:
 
     std::unordered_map<uint16_t, std::shared_ptr<TcpConnection>> _connections;
     MessageHandler _message_handler;
-    ConnectionHandler _connect_handler;
-    ConnectionHandler _disconnect_handler;
+    ConnectHandler _connect_handler;
+    DisconnectHandler _disconnect_handler;
 
     void StartAccept();
     void HandleAccept(std::shared_ptr<TcpConnection> conn, const asio::error_code& ec);
     void StartRead(std::shared_ptr<TcpConnection> conn);
     void HandleRead(std::shared_ptr<TcpConnection> conn, const asio::error_code& ec, size_t bytes_transferred);
     void CloseConnection(uint16_t conn_id);
+    void DoWrite(std::shared_ptr<TcpConnection> conn, std::vector<uint8_t> data);
+
+    static constexpr size_t MAX_WRITE_QUEUE_SIZE = 64;
 };
 
 } // namespace Protocol

@@ -51,6 +51,10 @@ risk:
     position-limit: 10000
     freq-limit: 60
 
+stp:
+  default-policy: REJECT_NEW
+  enabled: true
+
 protocol:
   host: 38.76.219.145
   port: 8080

@@ -13,6 +13,8 @@
 
 #include <cstring>
 #include <algorithm>
+#include <iomanip>
+#include <sstream>
 
 namespace CppTrader {
 namespace Protocol {
@@ -105,6 +107,40 @@ bool HmacVerifier::VerifyPrefix(const MsgHeader& header, const uint8_t* body, si
 {
     uint16_t expected = ComputePrefix(header, body, body_len);
     return (expected ^ header.HmacPrefix) == 0;
+}
+
+std::string HmacVerifier::BuildAuthSignMessage(uint64_t timestamp, const uint8_t* nonce, size_t nonce_len, const std::string& api_key_id)
+{
+    std::stringstream ts_hex;
+    ts_hex << std::hex << std::setfill('0') << std::setw(16) << timestamp;
+
+    std::stringstream nonce_hex;
+    nonce_hex << std::hex << std::setfill('0');
+    for (size_t i = 0; i < nonce_len; ++i)
+        nonce_hex << std::setw(2) << static_cast<int>(nonce[i]);
+
+    return ts_hex.str() + nonce_hex.str() + api_key_id;
+}
+
+bool HmacVerifier::VerifyAuthSignature(const uint8_t* api_key_secret, size_t secret_len,
+                                        uint64_t timestamp, const uint8_t* nonce, size_t nonce_len,
+                                        const std::string& api_key_id,
+                                        const uint8_t* provided_signature, size_t sig_len)
+{
+    std::string sign_message = BuildAuthSignMessage(timestamp, nonce, nonce_len, api_key_id);
+
+    auto computed = HmacSHA256(
+        api_key_secret, secret_len,
+        reinterpret_cast<const uint8_t*>(sign_message.data()), sign_message.size());
+
+    if (sig_len != computed.size())
+        return false;
+
+    uint8_t xor_result = 0;
+    for (size_t i = 0; i < computed.size(); ++i)
+        xor_result |= computed[i] ^ provided_signature[i];
+
+    return xor_result == 0;
 }
 
 } // namespace Protocol

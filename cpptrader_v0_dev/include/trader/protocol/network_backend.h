@@ -11,9 +11,12 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <functional>
 
 namespace CppTrader {
 namespace Protocol {
+
+struct MsgHeader;
 
 //! Network backend abstract interface
 /*!
@@ -31,10 +34,15 @@ public:
     INetworkBackend& operator=(const INetworkBackend&) = delete;
     INetworkBackend& operator=(INetworkBackend&&) = delete;
 
-    //! Initialize the network backend
-    /*!
-        \return true if initialization succeeded, false otherwise
-    */
+    using MessageHandler = std::function<void(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len)>;
+    using ConnectHandler = std::function<void(uint16_t conn_id)>;
+    using DisconnectHandler = std::function<void(uint16_t conn_id)>;
+
+    virtual void SetMessageHandler(const MessageHandler& handler) = 0;
+    virtual void SetConnectHandler(const ConnectHandler& handler) = 0;
+    virtual void SetDisconnectHandler(const DisconnectHandler& handler) = 0;
+    virtual void close(uint16_t conn_id) = 0;
+
     virtual bool init() = 0;
 
     //! Poll for incoming data

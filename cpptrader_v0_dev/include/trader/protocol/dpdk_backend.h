@@ -73,17 +73,6 @@ struct DpdkConnection
 class DpdkBackend : public INetworkBackend
 {
 public:
-    //! Message handler callback type
-    using MessageHandler = std::function<void(uint16_t conn_id, const MsgHeader& header, const uint8_t* body, size_t body_len)>;
-    //! Connection handler callback type
-    using ConnectionHandler = std::function<void(uint16_t conn_id)>;
-
-    //! Constructor
-    /*!
-        \param port_id - DPDK port identifier
-        \param num_rx_queues - Number of receive queues
-        \param num_tx_queues - Number of transmit queues
-    */
     DpdkBackend(uint16_t port_id = 0, uint16_t num_rx_queues = 1, uint16_t num_tx_queues = 1);
     ~DpdkBackend() override;
 
@@ -104,14 +93,10 @@ public:
     //! Broadcast data to all connected clients
     void broadcast(const void* data, size_t len) override;
 
-    //! Set message handler callback
-    void SetMessageHandler(const MessageHandler& handler) { _message_handler = handler; }
-
-    //! Set connection established handler
-    void SetConnectHandler(const ConnectionHandler& handler) { _connect_handler = handler; }
-
-    //! Set connection closed handler
-    void SetDisconnectHandler(const ConnectionHandler& handler) { _disconnect_handler = handler; }
+    void SetMessageHandler(const MessageHandler& handler) override { _message_handler = handler; }
+    void SetConnectHandler(const ConnectHandler& handler) override { _connect_handler = handler; }
+    void SetDisconnectHandler(const DisconnectHandler& handler) override { _disconnect_handler = handler; }
+    void close(uint16_t conn_id) override;
 
     //! Get number of active connections
     size_t ConnectionCount() const noexcept { return _connections.size(); }
@@ -128,8 +113,8 @@ private:
 
     std::unordered_map<uint16_t, std::shared_ptr<DpdkConnection>> _connections;
     MessageHandler _message_handler;
-    ConnectionHandler _connect_handler;
-    ConnectionHandler _disconnect_handler;
+    ConnectHandler _connect_handler;
+    DisconnectHandler _disconnect_handler;
 
     // Simplified TCP state machine
     void ProcessRxPackets();

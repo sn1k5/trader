@@ -14,6 +14,7 @@
 #include <array>
 #include <cstdint>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace CppTrader {
@@ -40,6 +41,13 @@ public:
 
     static std::array<uint8_t, 32> HmacSHA256(const uint8_t* key, size_t key_len,
                                                const uint8_t* data, size_t data_len);
+
+    static std::string BuildAuthSignMessage(uint64_t timestamp, const uint8_t* nonce, size_t nonce_len, const std::string& api_key_id);
+
+    static bool VerifyAuthSignature(const uint8_t* api_key_secret, size_t secret_len,
+                                    uint64_t timestamp, const uint8_t* nonce, size_t nonce_len,
+                                    const std::string& api_key_id,
+                                    const uint8_t* provided_signature, size_t sig_len);
 
 private:
     std::vector<uint8_t> session_key_;
