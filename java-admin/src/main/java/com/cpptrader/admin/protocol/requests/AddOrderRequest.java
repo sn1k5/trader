@@ -9,12 +9,14 @@ public class AddOrderRequest extends ProtocolMessage {
 
     private long id;
     private int symbolId;
+    private long accountId;
     private byte orderType;
     private byte orderSide;
     private long price;
     private long stopPrice;
     private long quantity;
     private byte timeInForce;
+    private byte stpPolicy;
     private long maxVisibleQuantity;
     private long slippage;
     private long trailingDistance;
@@ -24,18 +26,21 @@ public class AddOrderRequest extends ProtocolMessage {
         super();
     }
 
-    public AddOrderRequest(long id, int symbolId, byte orderType, byte orderSide,
+    public AddOrderRequest(long id, int symbolId, long accountId, byte orderType, byte orderSide,
                            long price, long stopPrice, long quantity, byte timeInForce,
-                           long maxVisibleQuantity, long slippage, long trailingDistance, long trailingStep) {
+                           byte stpPolicy, long maxVisibleQuantity, long slippage,
+                           long trailingDistance, long trailingStep) {
         super(ProtocolConstants.ADD_ORDER_REQ, ProtocolConstants.FLAG_REQUEST);
         this.id = id;
         this.symbolId = symbolId;
+        this.accountId = accountId;
         this.orderType = orderType;
         this.orderSide = orderSide;
         this.price = price;
         this.stopPrice = stopPrice;
         this.quantity = quantity;
         this.timeInForce = timeInForce;
+        this.stpPolicy = stpPolicy;
         this.maxVisibleQuantity = maxVisibleQuantity;
         this.slippage = slippage;
         this.trailingDistance = trailingDistance;
@@ -52,6 +57,7 @@ public class AddOrderRequest extends ProtocolMessage {
         OrderHolder o = new OrderHolder();
         o.id = id;
         o.symbolId = symbolId;
+        o.accountId = accountId;
         o.orderType = orderType;
         o.orderSide = orderSide;
         o.price = price;
@@ -60,6 +66,7 @@ public class AddOrderRequest extends ProtocolMessage {
         o.executedQuantity = 0;
         o.leavesQuantity = quantity;
         o.timeInForce = timeInForce;
+        o.stpPolicy = stpPolicy;
         o.maxVisibleQuantity = maxVisibleQuantity;
         o.slippage = slippage;
         o.trailingDistance = trailingDistance;
@@ -73,12 +80,14 @@ public class AddOrderRequest extends ProtocolMessage {
         readOrderProto(buf, o);
         this.id = o.id;
         this.symbolId = o.symbolId;
+        this.accountId = o.accountId;
         this.orderType = o.orderType;
         this.orderSide = o.orderSide;
         this.price = o.price;
         this.stopPrice = o.stopPrice;
         this.quantity = o.quantity;
         this.timeInForce = o.timeInForce;
+        this.stpPolicy = o.stpPolicy;
         this.maxVisibleQuantity = o.maxVisibleQuantity;
         this.slippage = o.slippage;
         this.trailingDistance = o.trailingDistance;
@@ -90,6 +99,9 @@ public class AddOrderRequest extends ProtocolMessage {
 
     public int getSymbolId() { return symbolId; }
     public void setSymbolId(int symbolId) { this.symbolId = symbolId; }
+
+    public long getAccountId() { return accountId; }
+    public void setAccountId(long accountId) { this.accountId = accountId; }
 
     public byte getOrderType() { return orderType; }
     public void setOrderType(byte orderType) { this.orderType = orderType; }
@@ -108,6 +120,9 @@ public class AddOrderRequest extends ProtocolMessage {
 
     public byte getTimeInForce() { return timeInForce; }
     public void setTimeInForce(byte timeInForce) { this.timeInForce = timeInForce; }
+
+    public byte getStpPolicy() { return stpPolicy; }
+    public void setStpPolicy(byte stpPolicy) { this.stpPolicy = stpPolicy; }
 
     public long getMaxVisibleQuantity() { return maxVisibleQuantity; }
     public void setMaxVisibleQuantity(long maxVisibleQuantity) { this.maxVisibleQuantity = maxVisibleQuantity; }

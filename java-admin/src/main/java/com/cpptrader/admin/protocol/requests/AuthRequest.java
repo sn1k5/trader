@@ -15,13 +15,22 @@ public class AuthRequest {
     private final long timestampMs;
     private final byte[] nonce;
     private final byte[] signature;
+    private final byte[] recoveryToken;
 
-    public AuthRequest(String apiKeyId, String apiKeySecret) {
+    public AuthRequest(String apiKeyId, String apiKeySecret, String recoveryToken) {
         this.apiKeyId = apiKeyId;
         this.timestampMs = System.currentTimeMillis();
         this.nonce = generateNonce();
         this.signature = HmacSigner.computeAuthSignature(
                 apiKeySecret.getBytes(StandardCharsets.UTF_8), timestampMs, nonce, apiKeyId);
+        if (recoveryToken != null) {
+            byte[] tokenBytes = recoveryToken.getBytes(StandardCharsets.UTF_8);
+            this.recoveryToken = new byte[ProtocolConstants.AUTH_RECOVERY_TOKEN_SIZE];
+            int copyLen = Math.min(tokenBytes.length, ProtocolConstants.AUTH_RECOVERY_TOKEN_SIZE);
+            System.arraycopy(tokenBytes, 0, this.recoveryToken, 0, copyLen);
+        } else {
+            this.recoveryToken = new byte[ProtocolConstants.AUTH_RECOVERY_TOKEN_SIZE];
+        }
     }
 
     private static byte[] generateNonce() {
@@ -46,6 +55,8 @@ public class AuthRequest {
         buf.put(nonce);
 
         buf.put(signature);
+
+        buf.put(recoveryToken);
 
         return buf.array();
     }
@@ -72,5 +83,9 @@ public class AuthRequest {
 
     public String getSignatureHex() {
         return HexFormat.of().formatHex(signature);
+    }
+
+    public byte[] getRecoveryToken() {
+        return recoveryToken.clone();
     }
 }

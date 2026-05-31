@@ -167,6 +167,7 @@ public abstract class ProtocolMessage {
     protected static void writeOrderProto(ByteBuffer buf, OrderHolder o) {
         buf.putLong(o.id);
         buf.putInt(o.symbolId);
+        buf.putLong(o.accountId);
         buf.put(o.orderType);
         buf.put(o.orderSide);
         buf.putLong(o.price);
@@ -175,7 +176,8 @@ public abstract class ProtocolMessage {
         buf.putLong(o.executedQuantity);
         buf.putLong(o.leavesQuantity);
         buf.put(o.timeInForce);
-        buf.put((byte) 0); // Padding1
+        buf.put((byte) 0);
+        buf.put(o.stpPolicy);
         buf.putLong(o.maxVisibleQuantity);
         buf.putLong(o.slippage);
         buf.putLong(o.trailingDistance);
@@ -185,6 +187,7 @@ public abstract class ProtocolMessage {
     protected static void readOrderProto(ByteBuffer buf, OrderHolder o) {
         o.id = buf.getLong();
         o.symbolId = buf.getInt();
+        o.accountId = buf.getLong();
         o.orderType = buf.get();
         o.orderSide = buf.get();
         o.price = buf.getLong();
@@ -193,7 +196,8 @@ public abstract class ProtocolMessage {
         o.executedQuantity = buf.getLong();
         o.leavesQuantity = buf.getLong();
         o.timeInForce = buf.get();
-        buf.get(); // Padding1
+        buf.get();
+        o.stpPolicy = buf.get();
         o.maxVisibleQuantity = buf.getLong();
         o.slippage = buf.getLong();
         o.trailingDistance = buf.getLong();
@@ -227,6 +231,7 @@ public abstract class ProtocolMessage {
     public static class OrderHolder {
         public long id;
         public int symbolId;
+        public long accountId;
         public byte orderType;
         public byte orderSide;
         public long price;
@@ -235,6 +240,7 @@ public abstract class ProtocolMessage {
         public long executedQuantity;
         public long leavesQuantity;
         public byte timeInForce;
+        public byte stpPolicy;
         public long maxVisibleQuantity;
         public long slippage;
         public long trailingDistance;

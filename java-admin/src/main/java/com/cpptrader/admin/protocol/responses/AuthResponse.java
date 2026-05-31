@@ -9,6 +9,8 @@ public class AuthResponse {
 
     private byte error;
     private byte[] sessionToken;
+    private long accountId;
+    private byte role;
 
     public AuthResponse() {
         this.sessionToken = new byte[ProtocolConstants.AUTH_SESSION_TOKEN_SIZE];
@@ -26,6 +28,8 @@ public class AuthResponse {
         AuthResponse response = new AuthResponse();
         response.error = buf.get();
         buf.get(response.sessionToken);
+        response.accountId = buf.getLong();
+        response.role = buf.get();
 
         return response;
     }
@@ -58,13 +62,26 @@ public class AuthResponse {
         return ProtocolConstants.ErrorCode.name(error);
     }
 
+    public long getAccountId() {
+        return accountId;
+    }
+
+    public byte getRole() {
+        return role;
+    }
+
+    public String getRoleName() {
+        return ProtocolConstants.Role.name(role);
+    }
+
     @Override
     public String toString() {
         if (isSuccess()) {
-            return String.format("AuthResponse[success=true, sessionToken=%s]", getSessionTokenHex());
+            return String.format("AuthResponse[success=true, sessionToken=%s, accountId=%d, role=%s]",
+                    getSessionTokenHex(), accountId, getRoleName());
         } else {
-            return String.format("AuthResponse[success=false, error=%d (%s)]", 
-                error & 0xFF, getErrorName());
+            return String.format("AuthResponse[success=false, error=%d (%s), accountId=%d, role=%s]",
+                    error & 0xFF, getErrorName(), accountId, getRoleName());
         }
     }
 }

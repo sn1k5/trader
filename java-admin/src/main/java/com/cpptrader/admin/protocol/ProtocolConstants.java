@@ -26,11 +26,13 @@ public final class ProtocolConstants {
     public static final byte DISABLE_MATCHING_REQ = 0x10;
     public static final byte SUBSCRIBE_ORDER_BOOK_REQ = 0x11;
     public static final byte SUBSCRIBE_ORDERS_REQ = 0x12;
+    public static final byte SNAPSHOT_REQUEST = 0x13;
 
     public static final byte SYMBOL_RESP = 0x41;
     public static final byte ORDER_BOOK_RESP = 0x42;
     public static final byte ORDER_RESP = 0x43;
     public static final byte SIMPLE_RESP = 0x44;
+    public static final byte SNAPSHOT_RESPONSE = 0x45;
 
     public static final byte ORDER_BOOK_UPDATE_EVT = (byte) 0x81;
     public static final byte ORDER_UPDATE_EVT = (byte) 0x82;
@@ -45,12 +47,13 @@ public final class ProtocolConstants {
     public static final byte AUTH_REQUEST = (byte) 0xD0;
     public static final byte AUTH_RESPONSE = (byte) 0xD1;
 
-    public static final int AUTH_REQUEST_BODY_SIZE = 88;
-    public static final int AUTH_RESPONSE_BODY_SIZE = 33;
+    public static final int AUTH_REQUEST_BODY_SIZE = 120;
+    public static final int AUTH_RESPONSE_BODY_SIZE = 42;
     public static final int AUTH_API_KEY_ID_SIZE = 32;
     public static final int AUTH_NONCE_SIZE = 16;
     public static final int AUTH_SIGNATURE_SIZE = 32;
     public static final int AUTH_SESSION_TOKEN_SIZE = 32;
+    public static final int AUTH_RECOVERY_TOKEN_SIZE = 32;
 
     public static final byte FLAG_REQUEST = 0x01;
     public static final byte FLAG_RESPONSE = 0x02;
@@ -60,7 +63,7 @@ public final class ProtocolConstants {
 
     public static final int SYMBOL_NAME_SIZE = 8;
     public static final int SYMBOL_PROTO_SIZE = 12;
-    public static final int ORDER_PROTO_SIZE = 88;
+    public static final int ORDER_PROTO_SIZE = 97;
     public static final int LEVEL_PROTO_SIZE = 32;
 
     public static final long NO_SLIPPAGE = -1L;
@@ -87,6 +90,7 @@ public final class ProtocolConstants {
         public static final byte RATE_LIMITED = 25;
         public static final byte CONNECTION_REJECTED = 26;
         public static final byte SERVER_SHUTTING_DOWN = 27;
+        public static final byte SELF_TRADE_PREVENTED = 28;
 
         public static String name(byte code) {
             return switch (code) {
@@ -109,6 +113,7 @@ public final class ProtocolConstants {
                 case RATE_LIMITED -> "RATE_LIMITED";
                 case CONNECTION_REJECTED -> "CONNECTION_REJECTED";
                 case SERVER_SHUTTING_DOWN -> "SERVER_SHUTTING_DOWN";
+                case SELF_TRADE_PREVENTED -> "SELF_TRADE_PREVENTED";
                 default -> "UNKNOWN";
             };
         }
@@ -211,6 +216,38 @@ public final class ProtocolConstants {
                 case IOC -> "IOC";
                 case FOK -> "FOK";
                 case AON -> "AON";
+                default -> "UNKNOWN";
+            };
+        }
+    }
+
+    public static final class STPPolicy {
+        private STPPolicy() {}
+        public static final byte CANCEL_NEW = 1;
+        public static final byte CANCEL_OLD = 2;
+        public static final byte CANCEL_BOTH = 3;
+        public static final byte DECREMENT = 4;
+
+        public static String name(byte policy) {
+            return switch (policy) {
+                case CANCEL_NEW -> "CANCEL_NEW";
+                case CANCEL_OLD -> "CANCEL_OLD";
+                case CANCEL_BOTH -> "CANCEL_BOTH";
+                case DECREMENT -> "DECREMENT";
+                default -> "UNKNOWN";
+            };
+        }
+    }
+
+    public static final class Role {
+        private Role() {}
+        public static final byte TRADER = 0;
+        public static final byte ADMIN = 1;
+
+        public static String name(byte role) {
+            return switch (role) {
+                case TRADER -> "TRADER";
+                case ADMIN -> "ADMIN";
                 default -> "UNKNOWN";
             };
         }

@@ -242,7 +242,7 @@ public class ProtocolClientService {
         try {
             log.info("Starting C++ HMAC authentication with API Key ID: {}", apiKeyId);
             
-            AuthRequest authRequest = new AuthRequest(apiKeyId, apiKeySecret);
+            AuthRequest authRequest = new AuthRequest(apiKeyId, apiKeySecret, null);
             
             byte[] authBody = authRequest.toBytes();
             ByteBuffer headerBuf = ByteBuffer.allocate(ProtocolConstants.HEADER_SIZE);

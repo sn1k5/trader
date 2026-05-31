@@ -29,5 +29,6 @@ public final class ProtocolConstants {
     public static final byte FLAG_HEARTBEAT = 0x10;
 
     public static final int SYMBOL_NAME_SIZE = 8;
+    public static final int ORDER_PROTO_SIZE = 97;
     public static final int LEVEL_PROTO_SIZE = 32;
 }

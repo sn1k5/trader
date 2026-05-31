@@ -206,12 +206,12 @@ public class ProtocolMessageFactory {
         return new GetSymbolRequest(id);
     }
 
-    public AddOrderRequest createAddOrderRequest(long id, int symbolId, byte orderType, byte orderSide,
+    public AddOrderRequest createAddOrderRequest(long id, int symbolId, long accountId, byte orderType, byte orderSide,
                                                   long price, long stopPrice, long quantity,
-                                                  byte timeInForce, long maxVisibleQty,
+                                                  byte timeInForce, byte stpPolicy, long maxVisibleQty,
                                                   long slippage, long trailingDistance, long trailingStep) {
-        return new AddOrderRequest(id, symbolId, orderType, orderSide, price, stopPrice, quantity,
-                timeInForce, maxVisibleQty, slippage, trailingDistance, trailingStep);
+        return new AddOrderRequest(id, symbolId, accountId, orderType, orderSide, price, stopPrice, quantity,
+                timeInForce, stpPolicy, maxVisibleQty, slippage, trailingDistance, trailingStep);
     }
 
     public DeleteOrderRequest createDeleteOrderRequest(long id) {

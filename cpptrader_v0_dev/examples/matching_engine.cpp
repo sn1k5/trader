@@ -149,9 +149,9 @@ void AddMarketOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::BuyMarket(id, symbol_id, quantity);
+            order = Order::BuyMarket(id, symbol_id, 0, STPPolicy::CANCEL_NEW, quantity);
         else if (match[1] == "sell")
-            order = Order::SellMarket(id, symbol_id, quantity);
+            order = Order::SellMarket(id, symbol_id, 0, STPPolicy::CANCEL_NEW, quantity);
         else
         {
             std::cerr << "Invalid market order side: " << match[1] << std::endl;
@@ -182,9 +182,9 @@ void AddSlippageMarketOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::BuyMarket(id, symbol_id, quantity, slippage);
+            order = Order::BuyMarket(id, symbol_id, 0, STPPolicy::CANCEL_NEW, quantity, slippage);
         else if (match[1] == "sell")
-            order = Order::SellMarket(id, symbol_id, quantity, slippage);
+            order = Order::SellMarket(id, symbol_id, 0, STPPolicy::CANCEL_NEW, quantity, slippage);
         else
         {
             std::cerr << "Invalid market order side: " << match[1] << std::endl;
@@ -215,9 +215,9 @@ void AddLimitOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::BuyLimit(id, symbol_id, price, quantity);
+            order = Order::BuyLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, price, quantity);
         else if (match[1] == "sell")
-            order = Order::SellLimit(id, symbol_id, price, quantity);
+            order = Order::SellLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, price, quantity);
         else
         {
             std::cerr << "Invalid limit order side: " << match[1] << std::endl;
@@ -248,9 +248,9 @@ void AddIOCLimitOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::BuyLimit(id, symbol_id, price, quantity, OrderTimeInForce::IOC);
+            order = Order::BuyLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, price, quantity, OrderTimeInForce::IOC);
         else if (match[1] == "sell")
-            order = Order::SellLimit(id, symbol_id, price, quantity, OrderTimeInForce::IOC);
+            order = Order::SellLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, price, quantity, OrderTimeInForce::IOC);
         else
         {
             std::cerr << "Invalid limit order side: " << match[1] << std::endl;
@@ -281,9 +281,9 @@ void AddFOKLimitOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::BuyLimit(id, symbol_id, price, quantity, OrderTimeInForce::FOK);
+            order = Order::BuyLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, price, quantity, OrderTimeInForce::FOK);
         else if (match[1] == "sell")
-            order = Order::SellLimit(id, symbol_id, price, quantity, OrderTimeInForce::FOK);
+            order = Order::SellLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, price, quantity, OrderTimeInForce::FOK);
         else
         {
             std::cerr << "Invalid limit order side: " << match[1] << std::endl;
@@ -314,9 +314,9 @@ void AddAONLimitOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::BuyLimit(id, symbol_id, price, quantity, OrderTimeInForce::AON);
+            order = Order::BuyLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, price, quantity, OrderTimeInForce::AON);
         else if (match[1] == "sell")
-            order = Order::SellLimit(id, symbol_id, price, quantity, OrderTimeInForce::AON);
+            order = Order::SellLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, price, quantity, OrderTimeInForce::AON);
         else
         {
             std::cerr << "Invalid limit order side: " << match[1] << std::endl;
@@ -347,9 +347,9 @@ void AddStopOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::BuyStop(id, symbol_id, stop_price, quantity);
+            order = Order::BuyStop(id, symbol_id, 0, STPPolicy::CANCEL_NEW, stop_price, quantity);
         else if (match[1] == "sell")
-            order = Order::SellStop(id, symbol_id, stop_price, quantity);
+            order = Order::SellStop(id, symbol_id, 0, STPPolicy::CANCEL_NEW, stop_price, quantity);
         else
         {
             std::cerr << "Invalid stop order side: " << match[1] << std::endl;
@@ -381,9 +381,9 @@ void AddStopLimitOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::BuyStopLimit(id, symbol_id, stop_price, price, quantity);
+            order = Order::BuyStopLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, stop_price, price, quantity);
         else if (match[1] == "sell")
-            order = Order::SellStopLimit(id, symbol_id, stop_price, price, quantity);
+            order = Order::SellStopLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, stop_price, price, quantity);
         else
         {
             std::cerr << "Invalid stop-limit order side: " << match[1] << std::endl;
@@ -416,9 +416,9 @@ void AddTrailingStopOrder(MarketManager& market, const std::string& command)
 
         Order order;
         if (match[1] == "buy")
-            order = Order::TrailingBuyStop(id, symbol_id, stop_price, quantity, trailing_distance, trailing_step);
+            order = Order::TrailingBuyStop(id, symbol_id, 0, STPPolicy::CANCEL_NEW, stop_price, quantity, trailing_distance, trailing_step);
         else if (match[1] == "sell")
-            order = Order::TrailingSellStop(id, symbol_id, stop_price, quantity, trailing_distance, trailing_step);
+            order = Order::TrailingSellStop(id, symbol_id, 0, STPPolicy::CANCEL_NEW, stop_price, quantity, trailing_distance, trailing_step);
         else
         {
             std::cerr << "Invalid stop order side: " << match[1] << std::endl;
@@ -452,9 +452,9 @@ void AddTrailingStopLimitOrder(MarketManager& market, const std::string& command
 
         Order order;
         if (match[1] == "buy")
-            order = Order::TrailingBuyStopLimit(id, symbol_id, stop_price, price, quantity, trailing_distance, trailing_step);
+            order = Order::TrailingBuyStopLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, stop_price, price, quantity, trailing_distance, trailing_step);
         else if (match[1] == "sell")
-            order = Order::TrailingSellStopLimit(id, symbol_id, stop_price, price, quantity, trailing_distance, trailing_step);
+            order = Order::TrailingSellStopLimit(id, symbol_id, 0, STPPolicy::CANCEL_NEW, stop_price, price, quantity, trailing_distance, trailing_step);
         else
         {
             std::cerr << "Invalid stop-limit order side: " << match[1] << std::endl;
